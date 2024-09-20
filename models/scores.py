@@ -10,6 +10,7 @@ class Team(Base):
   team_number: Mapped[str] = mapped_column(primary_key=True)
   name: Mapped[str] = mapped_column(String(255), nullable=False)
   is_fim: Mapped[Boolean] = mapped_column(Boolean(), nullable=False, default=False)
+  rookie_year: Mapped[int] = mapped_column(Integer(), nullable=True)
 
   def __str__(self):
     return str(self.teamnumber) + " " + self.name
@@ -40,7 +41,7 @@ class TeamScore(Base):
 
   def score_team(self):
     return self.qual_points+self.alliance_points+self.elim_points+\
-    self.award_points+self.rookie_bonus+self.stat_correction
+    self.award_points+self.rookie_points+self.stat_correction
   
   def __str__(self):
     return str(self.team_key) +" Competing at " + str(self.event_key) +\
@@ -66,6 +67,7 @@ class League(Base):
   offseason: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=False)
   team_limit: Mapped[int] = mapped_column(Integer(), nullable=False, default=8)
   team_starts: Mapped[int] = mapped_column(Integer(), nullable=False, default=3)
+  active: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=True)
 
   def __str__(self):
     return self.league_name

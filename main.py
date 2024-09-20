@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from discord import Embed
 import os
 import logging
 import logging.handlers
@@ -27,6 +28,11 @@ class FantasyFiMBot(commands.Bot):
         self.engine = create_engine(url=conn_str)
         self.session = self.engine.connect()
         Base.metadata.create_all(self.engine)
+
+    async def log_message(self, title, message):
+        logChannel = await self.fetch_channel(int(os.getenv("LOGGING_CHANNEL_ID")))
+        embed = Embed(title=f"{title}", description=f"{message}")
+        return await logChannel.send(embed = embed)
 
     async def get_session(self):
         Session = sessionmaker(bind=self.engine)

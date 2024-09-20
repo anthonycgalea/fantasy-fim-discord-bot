@@ -10,7 +10,7 @@ import traceback
 import os
 import asyncio
 from models.users import Player
-from models.scores import Team, League, FRCEvent
+from models.scores import Team, League, FRCEvent, TeamScore
 
 logger = logging.getLogger('discord')
 TBA_API_ENDPOINT = "https://www.thebluealliance.com/api/v3/"
@@ -107,11 +107,123 @@ class Admin(commands.Cog):
     embed.description = "Updated event list from The Blue Alliance"
     await interaction.edit_original_response(embed = embed)
 
-  def verifyAdmin(self, interaction: discord.Interaction):
+  async def importSingleEventTask(self, interaction, eventKey):
+    embed = Embed(title=f"Import Event {eventKey}", description=f"Importing event info for key {eventKey} from The Blue Alliance")
+    await interaction.response.send_message(embed = embed)
+    reqheaders = {"X-TBA-Auth-Key": TBA_AUTH_KEY}
+    session = await self.bot.get_session()
+    eventResult = session.query(FRCEvent).filter(FRCEvent.event_key == eventKey)
+    try:
+      requestURL = TBA_API_ENDPOINT + "event/" + str(eventKey)
+      response = requests.get(requestURL, headers=reqheaders).json()
+      if (not "key" in response.keys()):
+        await interaction.response.send_message(f"Event {eventKey} does not exist on The Blue Alliance")
+        return
+      eventKey = str(response["key"])
+      eventName = str(response["name"])
+      week=99
+      year=eventKey[:4]
+      if eventResult.count() == 0:
+        logger.info(f"Inserting event {eventKey}: {eventName}")
+        isFiM = False
+        eventToAdd = FRCEvent(event_key=eventKey, event_name=eventName, year=year, week=week, is_fim=isFiM)
+        session.add(eventToAdd)
+      elif not (eventResult.first().event_name == eventName\
+                and str(eventResult.first().year) == str(year)\
+                and str(eventResult.first().week) == str(week)): 
+        logger.info(f"Updating event {eventKey}")
+        eventResult.first().event_name = eventName
+        eventResult.first().year = year
+        eventResult.first().week = week
+      embed.description = f"Retrieving {eventKey} teams"
+      await interaction.edit_original_response(embed=embed)
+      requestURL += "/teams/simple"
+      response = requests.get(requestURL, headers=reqheaders).json()
+      teamscores = session.query(TeamScore).filter(TeamScore.event_key==eventKey)
+      for team in response:
+        teamNumber = str(team["team_number"])
+        if teamscores.filter(TeamScore.team_key == teamNumber).count() == 0:
+          logger.info(f"Team {teamNumber} registered for {eventKey}")
+          teamScoreToAdd = TeamScore(team_key=teamNumber, event_key=eventKey)
+          session.add(teamScoreToAdd)
+      session.commit()
+      embed.description = f"Retrieved all {eventKey} information"
+      await interaction.edit_original_response(embed=embed)
+    except Exception:
+      embed.description = f"Error retrieving offseason event {eventKey} from The Blue Alliance"
+      await interaction.edit_original_response(embed=embed)
+      logger.error(traceback.format_exc())
+      return
+
+  async def importFullDistrctTask(self, interaction, district, year):
+    embed = Embed(title=f"Importing {district} District", description=f"Importing event info for all {district} districts from The Blue Alliance")
+    await interaction.response.send_message(embed = embed)
+    reqheaders = {"X-TBA-Auth-Key": TBA_AUTH_KEY}
+    session = await self.bot.get_session()
+    try:
+      requestURL = TBA_API_ENDPOINT + "district/" + str(year) + str(district) + "/events"
+      response = requests.get(requestURL, headers=reqheaders).json()
+      if (not isinstance(response, list)):
+        embed.description = f"District {district} does not exist on The Blue Alliance"
+        await interaction.edit_original_response(embed=embed)
+        return
+      numberOfEvents = len(response)
+      i = 1
+      for event in response:
+        week=int(event["week"])+1
+        if week < 6:
+          eventKey = str(event["key"])
+          eventName = str(event["name"])
+          year=eventKey[:4]
+          eventResult = session.query(FRCEvent).filter(FRCEvent.event_key == eventKey)
+          if eventResult.count() == 0:
+            logger.info(f"Inserting event {eventKey}: {eventName}")
+            isFiM = False
+            eventToAdd = FRCEvent(event_key=eventKey, event_name=eventName, year=year, week=week, is_fim=isFiM)
+            session.add(eventToAdd)
+          elif not (eventResult.first().event_name == eventName\
+                    and str(eventResult.first().year) == str(year)\
+                    and str(eventResult.first().week) == str(week)): 
+            logger.info(f"Updating event {eventKey}")
+            eventResult.first().event_name = eventName
+            eventResult.first().year = year
+            eventResult.first().week = week
+          embed.description = f"Retrieving {eventKey} teams (Event {i}/{numberOfEvents})"
+          await interaction.edit_original_response(embed=embed)
+          requestURL = TBA_API_ENDPOINT + "event/" + str(eventKey) + "/teams/simple"
+          response = requests.get(requestURL, headers=reqheaders).json()
+          teamscores = session.query(TeamScore).filter(TeamScore.event_key==eventKey)
+          teamlist = set()
+          for team in response:
+            teamNumber = str(team["team_number"])
+            teamlist.add(teamNumber)
+            if teamscores.filter(TeamScore.team_key == teamNumber).count() == 0:
+              logger.info(f"Team {teamNumber} registered for {eventKey}")
+              teamScoreToAdd = TeamScore(team_key=teamNumber, event_key=eventKey)
+              session.add(teamScoreToAdd)
+          for team in teamscores.all():
+            if not str(team.team_key) in teamlist:
+              logger.info(f"Team {team.team_key} un-registered from {team.event_key}")
+              session.delete(team)
+        i+=1
+      session.commit()
+      embed.description = f"Retrieved all {district} information"
+      await interaction.edit_original_response(embed=embed)
+    except Exception:
+      embed.description = f"Error retrieving offseason event {eventKey} from The Blue Alliance"
+      await interaction.edit_original_response(embed=embed)
+      logger.error(traceback.format_exc())
+      return
+    pass
+
+  async def verifyAdmin(self, interaction: discord.Interaction):
     stmt = select(Player).where(Player.user_id == str(interaction.user.id))
     users = self.bot.session.execute(stmt)
-
-    return not (users.rowcount == 0 or not users.first().is_admin)
+    if (users.rowcount == 0 or not users.first().is_admin):
+      await interaction.response.send_message("You are not authorized to use this command.")
+      return False
+    else:
+      return True
 
   def getLeagueId(self):
     stmt = text("select max(league_id) from league")
@@ -123,15 +235,12 @@ class Admin(commands.Cog):
 
   @app_commands.command(name="updateteamlist", description="Grabs all teams from TBA")
   async def updateTeamList(self, interaction: discord.Interaction):    
-    if (not self.verifyAdmin(interaction)):
-      await interaction.response.send_message("You are not authorized to use this command.")
-      return
-    else:
+    if (self.verifyAdmin(interaction)):
       asyncio.create_task(self.updateTeamsTask(interaction))
       
   @app_commands.command(name="addleague", description="Create a new league")
   async def createLeague(self, interaction: discord.Interaction, league_name: str, team_limit: int, team_starts: int, offseason: bool):
-    if (self.verifyAdmin(interaction)):
+    if (await self.verifyAdmin(interaction)):
       
       leagueToAdd = League(league_id=self.getLeagueId(), league_name=league_name, team_limit=team_limit,\
                            team_starts=team_starts, offseason=offseason)
@@ -143,11 +252,20 @@ class Admin(commands.Cog):
       
   @app_commands.command(name="updateevents", description="Update events for a given year")
   async def updateEvents(self, interaction: discord.Interaction, year: int):
-    if (self.verifyAdmin(interaction)):
+    if (await self.verifyAdmin(interaction)):
       asyncio.create_task(self.updateEventsTask(interaction, year))
-    else:
-      await interaction.response.send_message("You are not authorized to use this command.")
-      return
+    
+  @app_commands.command(name="importoffseasonevent", description="Imports offseason event and team list from TBA")
+  async def importOffseasonEvent(self, interaction: discord.Interaction, eventkey: str):
+    if (await self.verifyAdmin(interaction)):
+      asyncio.create_task(self.importSingleEventTask(interaction, eventkey))
+
+  @app_commands.command(name="importdistrict", description="Pull all registration data for district events and load db")
+  async def importDistrict(self, interaction: discord.Interaction, district: str, year: str):
+    if (await self.verifyAdmin(interaction)):
+      asyncio.create_task(self.importFullDistrctTask(interaction, district, year))
+
+
       
 
 async def setup(bot: commands.Bot) -> None:

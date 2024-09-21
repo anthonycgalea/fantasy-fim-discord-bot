@@ -10,8 +10,9 @@ import traceback
 import os
 import asyncio
 import random
+import cogs.drafting as drafting
 from models.users import Player
-from models.scores import Team, League, FRCEvent, TeamScore, FantasyTeam
+from models.scores import Team, League, FRCEvent, TeamScore, FantasyTeam, PlayerAuthorized
 from models.draft import Draft, DraftOrder, DraftPick
 
 logger = logging.getLogger('discord')
@@ -64,6 +65,7 @@ class Admin(commands.Cog):
         return
     embed.description = "Updated team list from The Blue Alliance"
     await interaction.edit_original_response(embed = embed)
+    session.close()
 
   async def updateEventsTask(self, interaction, year):
     embed = Embed(title="Update Event List", description=f"Updating event list for {year} from The Blue Alliance")
@@ -115,6 +117,7 @@ class Admin(commands.Cog):
       return
     embed.description = "Updated event list from The Blue Alliance"
     await interaction.edit_original_response(embed = embed)
+    session.close()
 
   async def importSingleEventTask(self, interaction, eventKey):
     embed = Embed(title=f"Import Event {eventKey}", description=f"Importing event info for key {eventKey} from The Blue Alliance")
@@ -158,10 +161,12 @@ class Admin(commands.Cog):
       session.commit()
       embed.description = f"Retrieved all {eventKey} information"
       await interaction.edit_original_response(embed=embed)
+      session.close()
     except Exception:
       embed.description = f"Error retrieving offseason event {eventKey} from The Blue Alliance"
       await interaction.edit_original_response(embed=embed)
       logger.error(traceback.format_exc())
+      session.close()
       return
 
   async def importFullDistrctTask(self, interaction, district, year):
@@ -239,12 +244,13 @@ class Admin(commands.Cog):
       session.commit()
       embed.description = f"Retrieved all {district} information"
       await interaction.edit_original_response(embed=embed)
+      session.close()
     except Exception:
       embed.description = f"Error retrieving offseason event {eventKey} from The Blue Alliance"
       await interaction.edit_original_response(embed=embed)
       logger.error(traceback.format_exc())
+      session.close()
       return
-    pass
 
   async def scoreWeekTask(self, interaction: discord.Interaction, year, week):
     session = await self.bot.get_session()
@@ -284,6 +290,7 @@ class Admin(commands.Cog):
       session.commit() 
     embed.description += f"**All events scored for week {week}**"
     await interaction.edit_original_response(embed=embed)
+    session.close()
 
   async def verifyAdmin(self, interaction: discord.Interaction):
     stmt = select(Player).where(Player.user_id == str(interaction.user.id))
@@ -324,15 +331,16 @@ class Admin(commands.Cog):
       asyncio.create_task(self.updateTeamsTask(interaction, startpage))
       
   @app_commands.command(name="addleague", description="Create a new league")
-  async def createLeague(self, interaction: discord.Interaction, league_name: str, team_limit: int, team_starts: int, offseason: bool):
+  async def createLeague(self, interaction: discord.Interaction, league_name: str, team_limit: int, team_starts: int, offseason: bool, year: int, is_fim: bool):
     if (await self.verifyAdmin(interaction)):      
       leagueToAdd = League(league_id=self.getLeagueId(), league_name=league_name, team_limit=team_limit,\
-                           team_starts=team_starts, offseason=offseason)
+                           team_starts=team_starts, offseason=offseason, is_fim=is_fim, year=year)
       session = await self.bot.get_session()
       session.add(leagueToAdd)
       session.commit()
       await interaction.response.send_message(f"League created successfully! League Id: " +\
                                               str(leagueToAdd.league_id))
+      session.close()
 
   @app_commands.command(name="registerteam", description="Register Fantasy Team")
   async def registerTeam(self, interaction:discord.Interaction, leagueid: int, teamname: str):
@@ -350,6 +358,7 @@ class Admin(commands.Cog):
       session = await self.bot.get_session()
       session.add(fantasyTeamToAdd)
       session.commit()
+      session.close()
       await interaction.response.send_message(f"Team {teamname} created successfully in league with id {leagueid}. Team id is {fantasyTeamToAdd.fantasy_team_id}")
 
   @app_commands.command(name="populateleague", description="Populates a League to the max amount of teams with generic teams")
@@ -370,9 +379,10 @@ class Admin(commands.Cog):
           session.commit()
           teamsInLeague = session.query(FantasyTeam).filter(FantasyTeam.league_id==leagueid)
         await interaction.response.send_message(f"Teams created successfully in league with id {leagueid}.")
+        session.close()
 
   @app_commands.command(name="createdraft", description="Creates a fantasy draft for a given League and populates it with picks")
-  async def createDraft(self, interaction:discord.Interaction, leagueid: int, rounds: int):
+  async def createDraft(self, interaction:discord.Interaction, leagueid: int, rounds: int, event_key: str):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
       leagues = session.query(League).filter(League.league_id==leagueid).filter(League.active == True)
@@ -387,7 +397,7 @@ class Admin(commands.Cog):
       if (leagues.first().team_starts > rounds):
         await interaction.response.send_message(f"Don't have enough rounds to draft!")
         return
-      draftToCreate = Draft(draft_id=self.getDraftId(), league_id=leagueid, rounds=rounds)
+      draftToCreate = Draft(draft_id=self.getDraftId(), league_id=leagueid, rounds=rounds, event_key=event_key)
       session.add(draftToCreate)
       session.commit()
       await interaction.response.send_message(f"Draft generated! Draft id {draftToCreate.draft_id}")
@@ -404,7 +414,8 @@ class Admin(commands.Cog):
         i+=1
       draftOrderEmbed.description+="```"
       await interaction.channel.send(embed=draftOrderEmbed)
-      session.commit()      
+      session.commit()
+      session.close()      
 
   @app_commands.command(name="startdraft", description="Starts the draft with the provided id")
   async def startDraft(self, interaction:discord.Interaction, draftid: int):
@@ -428,6 +439,7 @@ class Admin(commands.Cog):
           draftPickToAdd = DraftPick(draft_id=draftid, fantasy_team_id=teamDraftOrder.fantasy_team_id, pick_number=pickNumber, team_number=-1)
           session.add(draftPickToAdd)
       session.commit()
+      session.close()
       await interaction.response.send_message(f"Draft rounds generated!") 
 
   @app_commands.command(name="updateevents", description="Update events for a given year")
@@ -449,8 +461,32 @@ class Admin(commands.Cog):
   async def scoreWeek(self, interaction:discord.Interaction, year: str, week: str):
     if (await self.verifyAdmin(interaction)):
       asyncio.create_task(self.scoreWeekTask(interaction, year, week))
+  
+  @app_commands.command(name="authorizeuser", description="Add an authorized user to a fantasy team")
+  async def authorizeUser(self, interaction:discord.Interaction, fantasyteamid: int, user: discord.User):
+    if (await self.bot.verifyTeamMember(fantasyteamid, interaction.user) or await self.verifyAdmin(interaction)):
+      session = await self.bot.get_session()
+      player = session.query(Player).filter(Player.user_id==str(user.id))
+      if (player.count() == 0):
+        session.add(Player(user_id=user.id, is_admin=False))
+        session.commit()
+      if not (await self.bot.verifyTeamMember(fantasyteamid, user)):
+        authorizeToAdd = PlayerAuthorized(fantasy_team_id=fantasyteamid, player_id=user.id)
+        session.add(authorizeToAdd)
+        session.commit()
+        session.close()
+        fantasyTeam = session.query(FantasyTeam).filter(FantasyTeam.fantasy_team_id==fantasyteamid).first()
+        await interaction.response.send_message(f"Successfully added <@{user.id}> to {fantasyTeam.fantasy_team_name}!")
+      else:
+        session.close()
+        await interaction.response.send_message("You can't add someone already on it to your own team dummy!")
     
-
+  @app_commands.command(name="forcepick", description="Admin ability to force a draft pick")
+  async def forceDraftPick(self, interaction:discord.Interaction, draft_id: int, team_number: str):
+    if (await self.verifyAdmin(interaction)):
+      await interaction.response.send_message(f"Attempting to force pick team {team_number}.")
+      draftCog = drafting.Drafting(self.bot)
+      await draftCog.makeDraftPickHandler(interaction=interaction, draft_id=draft_id, team_number=team_number, force=True)
       
 
 async def setup(bot: commands.Bot) -> None:

@@ -67,6 +67,8 @@ class League(Base):
   offseason: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=False)
   team_limit: Mapped[int] = mapped_column(Integer(), nullable=False, default=8)
   team_starts: Mapped[int] = mapped_column(Integer(), nullable=False, default=3)
+  is_fim: Mapped[bool] = mapped_column(Boolean(), default=False)
+  year: Mapped[int] = mapped_column(Integer(), nullable=False)
   active: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=True)
 
   def __str__(self):

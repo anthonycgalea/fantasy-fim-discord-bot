@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey, Integer
+from sqlalchemy import ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 from .base import Base
 
@@ -8,6 +8,7 @@ class Draft(Base):
   draft_id: Mapped[int] = mapped_column(Integer(), primary_key=True)
   league_id: Mapped[int] = mapped_column(ForeignKey("league.league_id"))
   event_key: Mapped[int] = mapped_column(ForeignKey("frcevent.event_key"))
+  discord_channel: Mapped[str] = mapped_column(String(30))
   rounds: Mapped[int] = mapped_column(Integer(), nullable=False, default=3)
 
 class DraftOrder(Base):

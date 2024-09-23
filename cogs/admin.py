@@ -18,6 +18,7 @@ from models.draft import Draft, DraftOrder, DraftPick
 logger = logging.getLogger('discord')
 TBA_API_ENDPOINT = "https://www.thebluealliance.com/api/v3/"
 TBA_AUTH_KEY = os.getenv("TBA_API_KEY")
+FORUM_CHANNEL_ID = os.getenv("DRAFT_FORUM_ID")
 
 
 
@@ -300,8 +301,11 @@ class Admin(commands.Cog):
       return False
     else:
       return True
+    
+  async def getForum(self):
+    return self.bot.get_channel(int(FORUM_CHANNEL_ID))
 
-  def getLeagueId(self):
+  def getLeagueId(self): #league id generation for primary key
     stmt = text("select max(league_id) from league")
     result = self.bot.session.execute(stmt).first()[0]
     if not result == None:
@@ -309,7 +313,7 @@ class Admin(commands.Cog):
     else:
       return 1
     
-  def getFantasyTeamId(self):
+  def getFantasyTeamId(self): #fantasy team id generation for primary key
     stmt = text("select max(fantasy_team_id) from fantasyteam")
     result = self.bot.session.execute(stmt).first()[0]
     if not result == None:
@@ -317,7 +321,7 @@ class Admin(commands.Cog):
     else:
       return 1
     
-  def getDraftId(self):
+  def getDraftId(self): #draft id generation for primary key
     stmt = text("select max(draft_id) from draft")
     result = self.bot.session.execute(stmt).first()[0]
     if not result == None:
@@ -332,21 +336,25 @@ class Admin(commands.Cog):
       
   @app_commands.command(name="addleague", description="Create a new league")
   async def createLeague(self, interaction: discord.Interaction, league_name: str, team_limit: int, team_starts: int, offseason: bool, year: int, is_fim: bool):
-    if (await self.verifyAdmin(interaction)):      
+    if (await self.verifyAdmin(interaction)):
+      forum = await self.getForum()
+      nameOfDraft = f"{league_name} League Thread"
+      thread = (await forum.create_thread(content="test",name=nameOfDraft))[0]
+      threadId = thread.id      
       leagueToAdd = League(league_id=self.getLeagueId(), league_name=league_name, team_limit=team_limit,\
-                           team_starts=team_starts, offseason=offseason, is_fim=is_fim, year=year)
+                           team_starts=team_starts, offseason=offseason, is_fim=is_fim, year=year, discord_channel=threadId)
       session = await self.bot.get_session()
       session.add(leagueToAdd)
       session.commit()
-      await interaction.response.send_message(f"League created successfully! League Id: " +\
-                                              str(leagueToAdd.league_id))
+      await interaction.response.send_message(f"League created successfully! <#{threadId}>")
       session.close()
 
   @app_commands.command(name="registerteam", description="Register Fantasy Team")
-  async def registerTeam(self, interaction:discord.Interaction, leagueid: int, teamname: str):
+  async def registerTeam(self, interaction:discord.Interaction, teamname: str):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
-      leagues = session.query(League).filter(League.league_id==leagueid)
+      leagues = session.query(League).filter(League.discord_channel==str(interaction.channel_id))
+      leagueid = leagues.first().league_id
       teamsInLeague = session.query(FantasyTeam).filter(FantasyTeam.league_id==leagueid)
       if (leagues.count() == 0):
         await interaction.response.send_message(f"No leagues exist with id {leagueid}.")
@@ -362,34 +370,35 @@ class Admin(commands.Cog):
       await interaction.response.send_message(f"Team {teamname} created successfully in league with id {leagueid}. Team id is {fantasyTeamToAdd.fantasy_team_id}")
 
   @app_commands.command(name="populateleague", description="Populates a League to the max amount of teams with generic teams")
-  async def populateLeague(self, interaction:discord.Interaction, leagueid: int):
+  async def populateLeague(self, interaction:discord.Interaction):
       if (await self.verifyAdmin(interaction)):
         session = await self.bot.get_session()
-        leagues = session.query(League).filter(League.league_id==leagueid)
+        leagues = session.query(League).filter(League.discord_channel==str(interaction.channel_id))
         if (leagues.count() == 0):
-          await interaction.response.send_message(f"No leagues exist with id {leagueid}.")
+          await interaction.response.send_message(f"No league exists in this channel.")
+        leagueid = leagues.first().league_id
         teamsInLeague = session.query(FantasyTeam).filter(FantasyTeam.league_id==leagueid)
         teamLimit = leagues.first().team_limit
         if (teamLimit <= teamsInLeague.count()):
-          await interaction.response.send_message(f"League with id {leagueid} is at max capacity.") 
+          await interaction.response.send_message(f"League is at max capacity.") 
           return
         while(teamLimit > teamsInLeague.count()):
           fantasyTeamToAdd = FantasyTeam(fantasy_team_id=self.getFantasyTeamId(), fantasy_team_name=f"Team {self.getFantasyTeamId()}", league_id=leagueid)
           session.add(fantasyTeamToAdd)
           session.commit()
           teamsInLeague = session.query(FantasyTeam).filter(FantasyTeam.league_id==leagueid)
-        await interaction.response.send_message(f"Teams created successfully in league with id {leagueid}.")
+        await interaction.response.send_message(f"Teams created successfully!.")
         session.close()
 
   @app_commands.command(name="createdraft", description="Creates a fantasy draft for a given League and populates it with picks")
-  async def createDraft(self, interaction:discord.Interaction, leagueid: int, rounds: int, event_key: str):
+  async def createDraft(self, interaction:discord.Interaction, rounds: int, event_key: str):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
-      leagues = session.query(League).filter(League.league_id==leagueid).filter(League.active == True)
+      leagues = session.query(League).filter(League.discord_channel==str(interaction.channel_id)).filter(League.active == True)
       if (leagues.count() == 0):
-        await interaction.response.send_message(f"No active leagues exist with id {leagueid}.")
+        await interaction.response.send_message(f"No active leagues exist in current channel.")
         return
-      
+      leagueid = leagues.first().league_id
       teamsInLeague = session.query(FantasyTeam).filter(FantasyTeam.league_id==leagueid)
       if (teamsInLeague.count() == 0):
         await interaction.response.send_message(f"Cannot create draft with no teams to draft")
@@ -397,12 +406,16 @@ class Admin(commands.Cog):
       if (leagues.first().team_starts > rounds):
         await interaction.response.send_message(f"Don't have enough rounds to draft!")
         return
-      draftToCreate = Draft(draft_id=self.getDraftId(), league_id=leagueid, rounds=rounds, event_key=event_key)
+      forum = await self.getForum()
+      nameOfDraft = f"{leagues.first().league_name} draft for {event_key}"
+      thread = (await forum.create_thread(content="test",name=nameOfDraft))[0]
+      threadId = thread.id
+      draftToCreate = Draft(draft_id=self.getDraftId(), league_id=leagueid, rounds=rounds, event_key=event_key, discord_channel=threadId)
       session.add(draftToCreate)
       session.commit()
-      await interaction.response.send_message(f"Draft generated! Draft id {draftToCreate.draft_id}")
+      await interaction.response.send_message(f"Draft generated! <#{threadId}>")
       #generate draft order
-      draftOrderEmbed = Embed(title=f"**Draft order for league id {leagueid}**", description="```Draft Slot    Team Name (id)\n")
+      draftOrderEmbed = Embed(title=f"**Draft order**", description="```Draft Slot    Team Name (id)\n")
       randomizedteams = [fantasyTeam.fantasy_team_id for fantasyTeam in teamsInLeague]
       random.shuffle(randomizedteams)
       i = 1
@@ -413,18 +426,19 @@ class Admin(commands.Cog):
         session.add(draftOrder)
         i+=1
       draftOrderEmbed.description+="```"
-      await interaction.channel.send(embed=draftOrderEmbed)
+      await thread.send(embed=draftOrderEmbed)
       session.commit()
       session.close()      
 
   @app_commands.command(name="startdraft", description="Starts the draft with the provided id")
-  async def startDraft(self, interaction:discord.Interaction, draftid: int):
+  async def startDraft(self, interaction:discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
-      drafts = session.query(Draft).filter(Draft.draft_id==draftid)
+      drafts = session.query(Draft).filter(Draft.discord_channel==str(interaction.channel_id))
       if (drafts.count() == 0):
-        await interaction.response.send_message(f"No drafts exist with id {draftid}.")
+        await interaction.response.send_message(f"This is not an active draft channel.")
         return
+      draftid = drafts.first().draft_id
       draftOrders = session.query(DraftOrder).filter(DraftOrder.draft_id==draftid)
       if (draftOrders.count() == 0):
         await interaction.response.send_message(f"Error generating draft picks.")
@@ -441,6 +455,8 @@ class Admin(commands.Cog):
       session.commit()
       session.close()
       await interaction.response.send_message(f"Draft rounds generated!") 
+      draftCog = drafting.Drafting(self.bot)
+      await draftCog.postDraftBoard(interaction=interaction)
 
   @app_commands.command(name="updateevents", description="Update events for a given year")
   async def updateEvents(self, interaction: discord.Interaction, year: int):
@@ -464,13 +480,13 @@ class Admin(commands.Cog):
   
   @app_commands.command(name="authorizeuser", description="Add an authorized user to a fantasy team")
   async def authorizeUser(self, interaction:discord.Interaction, fantasyteamid: int, user: discord.User):
-    if (await self.bot.verifyTeamMember(fantasyteamid, interaction.user) or await self.verifyAdmin(interaction)):
+    if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
       player = session.query(Player).filter(Player.user_id==str(user.id))
       if (player.count() == 0):
         session.add(Player(user_id=user.id, is_admin=False))
         session.commit()
-      if not (await self.bot.verifyTeamMember(fantasyteamid, user)):
+      if not (await self.bot.verifyTeamMember(interaction, user)):
         authorizeToAdd = PlayerAuthorized(fantasy_team_id=fantasyteamid, player_id=user.id)
         session.add(authorizeToAdd)
         session.commit()
@@ -482,11 +498,11 @@ class Admin(commands.Cog):
         await interaction.response.send_message("You can't add someone already on it to your own team dummy!")
     
   @app_commands.command(name="forcepick", description="Admin ability to force a draft pick")
-  async def forceDraftPick(self, interaction:discord.Interaction, draft_id: int, team_number: str):
+  async def forceDraftPick(self, interaction:discord.Interaction, team_number: str):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to force pick team {team_number}.")
       draftCog = drafting.Drafting(self.bot)
-      await draftCog.makeDraftPickHandler(interaction=interaction, draft_id=draft_id, team_number=team_number, force=True)
+      await draftCog.makeDraftPickHandler(interaction=interaction, team_number=team_number, force=True)
       
 
 async def setup(bot: commands.Bot) -> None:

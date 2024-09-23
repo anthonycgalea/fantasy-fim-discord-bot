@@ -70,6 +70,7 @@ class League(Base):
   is_fim: Mapped[bool] = mapped_column(Boolean(), default=False)
   year: Mapped[int] = mapped_column(Integer(), nullable=False)
   active: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=True)
+  discord_channel: Mapped[str] = mapped_column(String(30), nullable=False)
 
   def __str__(self):
     return self.league_name
@@ -86,6 +87,7 @@ class TeamOwned(Base):
   fantasy_team_id: Mapped[int] = mapped_column(ForeignKey("fantasyteam.fantasy_team_id"),\
                                                primary_key=True)
   league_id: Mapped[int] = mapped_column(ForeignKey("league.league_id"),primary_key=True)
+  draft_id: Mapped[int] = mapped_column(ForeignKey("draft.draft_id"), primary_key=True)
   
   def __str__(self):
     return str(self.team_key) + " is owned by " + str(self.fantasy_team_id) + " in " +\

@@ -8,7 +8,7 @@ import os
 import threading
 import aiohttp
 import json
-from models.scores import League
+from models.scores import League, FantasyTeam
 from discord import Embed
 
 logger = logging.getLogger('discord')
@@ -26,15 +26,31 @@ class General(commands.Cog):
   async def getLeagues(self, interaction: discord.Interaction):
     session = await self.bot.get_session()
     leagues = session.query(League).where(League.active == True)
-    embed = Embed(title="**League Listing**", description="```League ID   League Name\n")
+    embed = Embed(title="**League Listing**", description="```League         Thread Link\n")
     if (leagues.count() == 0):
       embed.description+="No active leagues```"
       await interaction.response.send_message(embed=embed)
       return
     for league in leagues.all():
-      embed.description += f'{league.league_id:>9d}   {league.league_name}\n'
+      embed.description += f'{league.league_name:>15s}   <#{league.discord_channel}>\n'
     embed.description += "```"
     await interaction.response.send_message(embed=embed)
+    session.close()
+
+  @app_commands.command(name="getteamsinleague", description="Reports on teams in the channel's league and their team IDs.")
+  async def getTeamsInLeagues(self, interaction: discord.Interaction):
+    session = await self.bot.get_session()
+    league = session.query(League).where(League.discord_channel==str(interaction.channel_id))
+    if (league.count() == 0):
+      await interaction.response.send_message("No league associated with this channel")
+    leagueid = league.first().league_id
+    fantasyTeams = session.query(FantasyTeam).where(FantasyTeam.league_id==leagueid).all()
+    draftOrderEmbed = Embed(title=f"**Teams in {league.first().league_name}**", description="```Team ID     Team Name (id)\n")
+    for team in fantasyTeams:
+      draftOrderEmbed.description+=f"{team.fantasy_team_id:>7d}:    {team.fantasy_team_name}\n"
+    draftOrderEmbed.description+="```"
+    await interaction.response.send_message(embed=draftOrderEmbed)
+    session.close()
 
 async def setup(bot: commands.Bot) -> None:
   cog = General(bot)

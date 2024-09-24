@@ -23,3 +23,9 @@ class DraftPick(Base):
   draft_id: Mapped[int] = mapped_column(ForeignKey("draft.draft_id"), primary_key=True)
   pick_number: Mapped[int] = mapped_column(Integer(), nullable=False, primary_key=True)
   team_number: Mapped[str] = mapped_column(ForeignKey("teams.team_number"))
+
+class StatboticsData(Base):
+  __tablename__ = "statboticsdata"
+  team_number: Mapped[str] = mapped_column(ForeignKey("teams.team_number"), primary_key=True)
+  year: Mapped[int] = mapped_column(Integer(), primary_key=True)
+  year_end_epa: Mapped[int] = mapped_column(Integer())

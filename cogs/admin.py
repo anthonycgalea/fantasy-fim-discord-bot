@@ -2,23 +2,24 @@ import discord, sqlalchemy
 from discord import app_commands
 from discord import Embed
 from discord.ext import commands
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.sql import text
 import requests
 import logging
 import traceback
 import os
 import asyncio
-import random
+import random, datetime
 import cogs.drafting as drafting
 from models.users import Player
 from models.scores import Team, League, FRCEvent, TeamScore, FantasyTeam, PlayerAuthorized
-from models.draft import Draft, DraftOrder, DraftPick
+from models.draft import Draft, DraftOrder, DraftPick, StatboticsData
 
 logger = logging.getLogger('discord')
 TBA_API_ENDPOINT = "https://www.thebluealliance.com/api/v3/"
 TBA_AUTH_KEY = os.getenv("TBA_API_KEY")
 FORUM_CHANNEL_ID = os.getenv("DRAFT_FORUM_ID")
+STATBOTICS_ENDPOINT = "https://api.statbotics.io/v3/team_year/"
 
 
 
@@ -26,6 +27,38 @@ class Admin(commands.Cog):
   def __init__(self, bot):
     self.bot = bot
     
+  async def updateStatboticsTask(self, interaction, year):
+    embed = Embed(title="Update Team List", description=f"Updating year end team data from Statbotics for {year}")
+    await interaction.response.send_message(embed=embed)
+    message = await interaction.original_response()
+    if (datetime.date.today().year < year or year < 2005):
+      embed.description = "Invalid year. Please try again"
+      await message.edit(embed=embed)
+      return
+    session = await self.bot.get_session()
+    teams = session.query(Team).filter(Team.rookie_year <= year).all()
+    i = 0
+    session.query(StatboticsData).filter(StatboticsData.year==year).delete()
+    teamcount = len(teams)
+    for team in teams:
+      try:
+        requestURL = STATBOTICS_ENDPOINT+f"{team.team_number}/{year}"
+        response = requests.get(requestURL)
+        if response.status_code == 500:
+          pass
+        responsejson = response.json()
+        unitlessEPA = int(responsejson["epa"]["unitless"])
+        logger.info(f"Team number: {team.team_number} Year: {year} year_end_epa: {unitlessEPA}")
+        session.add(StatboticsData(team_number=team.team_number, year=year, year_end_epa=unitlessEPA))
+        session.commit()
+      except Exception:
+        logger.error(traceback.format_exc())
+      i+=1
+      if (i%50==0):
+        embed.description=f"Processed {i}/{teamcount} Teams"
+        await message.edit(embed=embed)
+    session.close()
+
   async def updateTeamsTask(self, interaction, startPage):
     embed = Embed(title="Update Team List", description="Updating team list from The Blue Alliance")
     await interaction.response.send_message(embed=embed)
@@ -369,7 +402,7 @@ class Admin(commands.Cog):
       session.close()
       await interaction.response.send_message(f"Team {teamname} created successfully in league with id {leagueid}. Team id is {fantasyTeamToAdd.fantasy_team_id}")
 
-  @app_commands.command(name="populateleague", description="Populates a League to the max amount of teams with generic teams")
+  @app_commands.command(name="fillleague", description="Populates a League to the max amount of teams with generic teams")
   async def populateLeague(self, interaction:discord.Interaction):
       if (await self.verifyAdmin(interaction)):
         session = await self.bot.get_session()
@@ -430,7 +463,7 @@ class Admin(commands.Cog):
       session.commit()
       session.close()      
 
-  @app_commands.command(name="startdraft", description="Starts the draft with the provided id")
+  @app_commands.command(name="startdraft", description="Starts the draft in the current channel")
   async def startDraft(self, interaction:discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
@@ -438,10 +471,12 @@ class Admin(commands.Cog):
       if (drafts.count() == 0):
         await interaction.response.send_message(f"This is not an active draft channel.")
         return
+      await interaction.response.send_message(f"Generating draft picks")
+      message = await interaction.original_response()
       draftid = drafts.first().draft_id
       draftOrders = session.query(DraftOrder).filter(DraftOrder.draft_id==draftid)
       if (draftOrders.count() == 0):
-        await interaction.response.send_message(f"Error generating draft picks.")
+        await message.edit(content=f"Error generating draft picks.")
         return
       for teamDraftOrder in draftOrders.all():
         for k in range(drafts.first().rounds):
@@ -453,10 +488,23 @@ class Admin(commands.Cog):
           draftPickToAdd = DraftPick(draft_id=draftid, fantasy_team_id=teamDraftOrder.fantasy_team_id, pick_number=pickNumber, team_number=-1)
           session.add(draftPickToAdd)
       session.commit()
+      await message.edit(content=f"Draft rounds generated!") 
       session.close()
-      await interaction.response.send_message(f"Draft rounds generated!") 
       draftCog = drafting.Drafting(self.bot)
       await draftCog.postDraftBoard(interaction=interaction)
+
+  @app_commands.command(name="resetdraft", description="Resets an already started draft.")
+  async def resetDraft(self, interaction:discord.Interaction):
+    if (await self.verifyAdmin(interaction)):
+      session = await self.bot.get_session()
+      drafts = session.query(Draft).filter(Draft.discord_channel==str(interaction.channel_id))
+      if (drafts.count() == 0):
+        await interaction.response.send_message(f"This is not a draft channel.")
+        return
+      draftid = drafts.first().draft_id
+      session.query(DraftPick).filter(DraftPick.draft_id==draftid).delete()
+      session.commit()
+    await interaction.response.send_message(f"Successfully reset draft! Use command /startdraft to restart the draft.")
 
   @app_commands.command(name="updateevents", description="Update events for a given year")
   async def updateEvents(self, interaction: discord.Interaction, year: int):
@@ -478,7 +526,7 @@ class Admin(commands.Cog):
     if (await self.verifyAdmin(interaction)):
       asyncio.create_task(self.scoreWeekTask(interaction, year, week))
   
-  @app_commands.command(name="authorizeuser", description="Add an authorized user to a fantasy team")
+  @app_commands.command(name="authorize", description="Add an authorized user to a fantasy team")
   async def authorizeUser(self, interaction:discord.Interaction, fantasyteamid: int, user: discord.User):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
@@ -503,7 +551,26 @@ class Admin(commands.Cog):
       await interaction.response.send_message(f"Attempting to force pick team {team_number}.")
       draftCog = drafting.Drafting(self.bot)
       await draftCog.makeDraftPickHandler(interaction=interaction, team_number=team_number, force=True)
-      
+
+  @app_commands.command(name="autopick", description="Admin ability to force an auto draft pick")    
+  async def forceAutoPick(self, interaction:discord.Interaction):
+    if (await self.verifyAdmin(interaction)):
+      await interaction.response.send_message(f"Attempting to force pick best available team.")
+      draftCog = drafting.Drafting(self.bot)
+      draft: Draft = await draftCog.getDraftFromChannel(interaction=interaction)
+      if (draft == None):
+          await interaction.channel.send(content="No draft associated with this channel.")
+          return
+      league: League = await draftCog.getLeague(draft_id=draft.draft_id)
+      suggestedTeams = await draftCog.getSuggestedTeamsList(eventKey=draft.event_key, year=league.year, isFiM=league.is_fim, draft_id=draft.draft_id)
+      teamToPick = suggestedTeams[0][0]
+      await draftCog.makeDraftPickHandler(interaction=interaction, team_number=teamToPick, force=True)
+
+  @app_commands.command(name="statboticsupdate", description="Updates cache of Statbotics data")    
+  async def updateStatbotics(self, interaction:discord.Interaction, year: int):
+    if (await self.verifyAdmin(interaction)):
+      asyncio.create_task(self.updateStatboticsTask(interaction, year))
+
 
 async def setup(bot: commands.Bot) -> None:
   cog = Admin(bot)

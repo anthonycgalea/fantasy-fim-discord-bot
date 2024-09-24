@@ -55,7 +55,7 @@ class ManageTeam(commands.Cog):
         await interaction.response.send_message("Collecting fantasy team board")
         await self.postTeamBoard(interaction, fantasyteam)
 
-    @app_commands.command(name="viewmyteam", description="View your fantasy team and when their FRC teams compete")
+    @app_commands.command(name="myteam", description="View your fantasy team and when their FRC teams compete")
     async def viewMyTeam(self, interaction: discord.Interaction):
         await interaction.response.send_message("Collecting fantasy team board")
         teamId = await self.getFantasyTeamIdFromInteraction(interaction=interaction)
@@ -65,12 +65,14 @@ class ManageTeam(commands.Cog):
             message = await interaction.original_response()
             await message.edit(content="You are not part of any team in this league!")
 
-    @app_commands.command(name="setstarter", description="Put team in starting lineup for week")
-    async def startTeam(self, interaction: discord.Interaction, fantasyteam: int, frcteam: str):
+    @app_commands.command(name="start", description="Put team in starting lineup for week")
+    async def startTeam(self, interaction: discord.Interaction, frcteam: str):
         await interaction.response.send_message(f"Attempting to place {frcteam} in starting lineup.")
-        if (self.bot.verifyTeamMember(interaction.user, fantasyteam)):
-            pass
-            await self.startTeamTask(interaction, fantasyteam, frcteam)
+        if (self.bot.verifyNotInLeague(interaction, interaction.user)):
+            await interaction.response.send_message("You are not in this league!")
+            return
+        else:
+            await self.startTeamTask(interaction, frcteam)
 
     @app_commands.command(name="addusertoteam", description="Add an authorized user to your fantasy team")
     async def authorizeUser(self, interaction: discord.Interaction, user: discord.User):

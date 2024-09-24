@@ -57,6 +57,7 @@ class FantasyFiMBot(commands.Bot):
 
         # Get the fantasy team ID from the first result row
         teamid = largeQuery.first().FantasyTeam.fantasy_team_id
+        logger.info(f"teamid {teamid}")
 
         # Now check if the given user is authorized in the same team
         users = session.query(PlayerAuthorized)\
@@ -66,6 +67,17 @@ class FantasyFiMBot(commands.Bot):
         session.close()
         return users.count() > 0
     
+    async def verifyTeamMemberByTeamId(self, fantasyId: int, user: discord.User):
+        session = await self.get_session()
+
+        # Now check if the given user is authorized in the same team
+        users = session.query(PlayerAuthorized)\
+            .filter(PlayerAuthorized.player_id == str(user.id))\
+            .filter(PlayerAuthorized.fantasy_team_id == int(fantasyId))
+
+        session.close()
+        return users.count() > 0
+
     async def verifyNotInLeague(self, interaction: discord.Interaction, user: discord.User):
         session = await self.get_session()
 
@@ -78,7 +90,6 @@ class FantasyFiMBot(commands.Bot):
 
         # Debugging: Print or log the results to see if the query is returning anything
         found_teams = existingTeamQuery.all()
-        print(f"Teams found for user {user.id}: {found_teams}")
 
         if len(found_teams) > 0:
             session.close()

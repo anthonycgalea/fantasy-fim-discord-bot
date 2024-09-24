@@ -120,7 +120,7 @@ class Drafting(commands.Cog):
     teamsEligible.update([team[0] for team in result])
     return team_number in teamsEligible
   
-  async def getSuggestedTeamsList(self, eventKey: str, year: int, isFiM: bool, draft_id: int):
+  async def getSuggestedTeamsList(self, eventKey: str, year: int, isFiM: bool, draft_id: int, isOffseason: bool=False):
     if (isFiM):
       stmt = text(f"""select distinct
                       teams.team_number,
@@ -149,7 +149,7 @@ class Drafting(commands.Cog):
                       and not team_number = '-1' 
                       )
                       order by year_end_epa desc""")
-    else:
+    elif (isOffseason==False):
       stmt = f"""
               select distinct
               team_key,
@@ -169,6 +169,68 @@ class Drafting(commands.Cog):
               and not team_number = '-1'
               )
               order by year_end_epa desc
+              """
+    else:
+       stmt = f"""
+              select distinct
+              team_key,
+              year_end_epa
+              from
+              teamscore
+              join
+              statboticsdata
+              on
+              teamscore.team_key=statboticsdata.team_number
+              where 
+              event_key={eventKey}
+              and statboticsdata.year={year}
+              and team_key not in (
+              select team_number from draftpick
+              where draft_id={draft_id}
+              and not team_number = '-1'
+              )
+              order by year_end_epa desc
+              """
+    result = self.bot.session.execute(stmt).all()
+    return result
+
+  async def getAllAvailableTeamsList(self, eventKey: str, year: int, isFiM: bool, draft_id: int):
+    if (isFiM):
+      stmt = text(f"""select distinct
+                      CAST(teams.team_number AS INT)
+                      from
+                      teams
+                      join 
+                      teamscore
+                      on 
+                      teams.team_number=teamscore.team_key
+                      join 
+                      frcevent
+                      on
+                      teamscore.event_key=frcevent.event_key
+                      where 
+                      teams.is_fim={isFiM}
+                      and frcevent.year={year}
+                      and teams.team_number not in (
+                      select team_number from draftpick
+                      where draft_id={draft_id}
+                      and not team_number = '-1' 
+                      )
+                      order by CAST(teams.team_number AS INT) asc""")
+    else:
+      stmt = f"""
+              select distinct
+              team_key
+              from
+              teamscore
+              where 
+              event_key={eventKey}
+              and team_key not in (
+              select team_number from draftpick
+              where draft_id={draft_id}
+              and not team_number = '-1'
+              )
+              order by CAST(team_key AS INT) asc
               """
     result = self.bot.session.execute(stmt).all()
     return result
@@ -268,6 +330,8 @@ class Drafting(commands.Cog):
         await self.postDraftBoard(interaction)
         await self.postSuggestedTeams(interaction)
         await self.notifyNextPick(interaction, draft_id=draft_id)
+        if (await self.getCurrentPickTeamId(draft_id=draft_id) == '-1'):
+           await interaction.channel.edit(archived=True, locked=True)
     else:
         await message.edit(content="It is not your turn to pick!")
     
@@ -293,6 +357,26 @@ class Drafting(commands.Cog):
       view = self.DraftPaginationView(self.bot, interaction, session, draftOrder, draft, rounds_per_page, total_pages)
       await interaction.channel.send(embed=draftBoardEmbed, view=view)
       
+      session.close()
+
+  async def postFullDraftBoard(self, interaction: discord.Interaction):
+      session = await self.bot.get_session()
+      draft: Draft = await self.getDraftFromChannel(interaction=interaction)
+      if (draft == None):
+         ogresponse = await interaction.original_response()
+         await ogresponse.edit(content="No draft associated with this channel.")
+         return
+      draft_id = draft.draft_id
+      draftOrder = session.query(DraftOrder)\
+          .filter(DraftOrder.draft_id == draft_id)\
+          .order_by(DraftOrder.draft_slot.asc()).all()
+      total_rounds = draft.rounds
+      rounds_per_page = 4
+      total_pages = ceil(total_rounds / rounds_per_page)
+      for k in range(total_pages):
+        draftBoardEmbed = await self.createDraftBoardEmbed(session, draftOrder, draft, k, total_pages, rounds_per_page)
+        view = self.DraftPaginationView(self.bot, interaction, session, draftOrder, draft, rounds_per_page, total_pages)
+        await interaction.channel.send(embed=draftBoardEmbed, view=view)      
       session.close()
 
   async def createDraftBoardEmbed(self, session, draftOrder, draft, current_page, total_pages, rounds_per_page):
@@ -324,6 +408,31 @@ class Drafting(commands.Cog):
       draftBoardEmbed.description += "```"
       return draftBoardEmbed
     
+  async def postAllAvailableTeams(self, interaction: discord.Interaction):
+      teamcount=0
+      draft: Draft = await self.getDraftFromChannel(interaction)
+      league: League = await self.getLeague(draft.draft_id)
+      allavailableteams = await self.getAllAvailableTeamsList(draft.event_key, league.year, league.is_fim, draft.draft_id)
+      #logger.info(allavailableteams)
+      embed = None
+      totalteams = len(allavailableteams)
+      while(teamcount < totalteams):
+        if (teamcount%168 == 0):
+           if not embed == None:
+              embed.description+="```"
+              await interaction.channel.send(embed=embed)
+           embed = Embed(description="```")
+        teamnumber = allavailableteams[teamcount][0]
+        embed.description+=f"{teamnumber:>7d}"
+        teamcount+=1
+        if (teamcount%8 == 0):
+           embed.description+="\n"
+      if not embed == None:
+         embed.description+="```"
+         await interaction.channel.send(embed=embed)
+     #embed = Embed(description="```")
+     
+
   async def finishDraft(self, draft_id):
     session = await self.bot.get_session()
     allDraftPicks = session.query(DraftPick).filter(DraftPick.draft_id==draft_id)
@@ -340,6 +449,7 @@ class Drafting(commands.Cog):
     if teamIdToPick == -1:
       msg += "Draft is complete!"
       await self.finishDraft(draft_id=draft_id)
+      await self.postFullDraftBoard(interaction=interaction)
     else:
       usersToNotify = session.query(PlayerAuthorized).filter(PlayerAuthorized.fantasy_team_id==teamIdToPick)
       teamToNotify = session.query(FantasyTeam).filter(FantasyTeam.fantasy_team_id==teamIdToPick).first()
@@ -356,14 +466,22 @@ class Drafting(commands.Cog):
 
 
   @app_commands.command(name="draftboard", description="Re-post the Draft Board")
+  @commands.cooldown(rate=1, per=60)
   async def repost_draft_board(self, interaction: discord.Interaction):
     await interaction.response.send_message("Sending draft board...")
     await self.postDraftBoard(interaction)
-  
+
   @app_commands.command(name="suggest", description="Provides a list of suggested teams based on the previous season's year-end EPA.")
+  @commands.cooldown(rate=1, per=60)
   async def suggestTenTeams(self, interaction: discord.Interaction):
      await interaction.response.defer()
      await self.postSuggestedTeams(interaction=interaction)
+
+  @app_commands.command(name="available", description="Posts all available teams in current draft.")
+  @commands.cooldown(rate=1, per=60)
+  async def getAllAvailable(self, interaction: discord.Interaction):
+     await interaction.response.send_message("**Fetching all available teams**")
+     await self.postAllAvailableTeams(interaction)
 
 async def setup(bot: commands.Bot) -> None:
   cog = Drafting(bot)

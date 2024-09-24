@@ -71,6 +71,7 @@ class League(Base):
   year: Mapped[int] = mapped_column(Integer(), nullable=False)
   active: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=True)
   discord_channel: Mapped[str] = mapped_column(String(30), nullable=False)
+  team_size_limit: Mapped[int] = mapped_column(Integer(), nullable=False)
 
   def __str__(self):
     return self.league_name

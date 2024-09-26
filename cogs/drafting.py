@@ -432,7 +432,6 @@ class Drafting(commands.Cog):
          await interaction.channel.send(embed=embed)
      #embed = Embed(description="```")
      
-
   async def finishDraft(self, draft_id):
     session = await self.bot.get_session()
     allDraftPicks = session.query(DraftPick).filter(DraftPick.draft_id==draft_id)

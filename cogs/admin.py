@@ -13,15 +13,15 @@ import random, datetime
 import cogs.drafting as drafting
 import cogs.manageteam as manageteam
 from models.users import Player
-from models.scores import Team, League, FRCEvent, TeamScore, FantasyTeam, PlayerAuthorized
+from models.scores import Team, League, FRCEvent, TeamScore, FantasyTeam, PlayerAuthorized, WeekStatus, TeamStarted, TeamOwned
 from models.draft import Draft, DraftOrder, DraftPick, StatboticsData
+from models.transactions import WaiverPriority, WaiverClaim, TeamOnWaivers
 
 logger = logging.getLogger('discord')
 TBA_API_ENDPOINT = "https://www.thebluealliance.com/api/v3/"
 TBA_AUTH_KEY = os.getenv("TBA_API_KEY")
 FORUM_CHANNEL_ID = os.getenv("DRAFT_FORUM_ID")
 STATBOTICS_ENDPOINT = "https://api.statbotics.io/v3/team_year/"
-
 
 
 class Admin(commands.Cog):
@@ -289,6 +289,13 @@ class Admin(commands.Cog):
 
   async def scoreWeekTask(self, interaction: discord.Interaction, year, week):
     session = await self.bot.get_session()
+    weekStatus = session.query(WeekStatus).filter(WeekStatus.week==week).filter(WeekStatus.year==year)
+    if (weekStatus.count() == 0):
+      await interaction.response.send_message("No week to score.")
+      return
+    elif (weekStatus.first().scores_finalized == True):
+      await interaction.response.send_message("Scores are already finalized.")
+      return
     eventsToScore = session.query(FRCEvent).filter(FRCEvent.year==year).filter(FRCEvent.is_fim==True).filter(FRCEvent.week==week)
     embed = Embed(title=f"Scoring week {week} for {year}", description=f"Importing event info for all {year} week {week} districts from The Blue Alliance")
     await interaction.response.send_message(embed = embed)
@@ -556,10 +563,10 @@ class Admin(commands.Cog):
         session.commit()
         session.close()
         fantasyTeam = session.query(FantasyTeam).filter(FantasyTeam.fantasy_team_id==fantasyteamid).first()
-        await interaction.response.send_message(f"Successfully added <@{user.id}> to {fantasyTeam.fantasy_team_name}!")
+        await interaction.response.send_message(f"Successfully added <@{user.id}> to {fantasyTeam.fantasy_team_name}!", ephemeral=True)
       else:
         session.close()
-        await interaction.response.send_message("You can't add someone already on it to their own team dummy!")
+        await interaction.response.send_message("You can't add someone already on it to their own team dummy!", ephemeral=True)
     
   @app_commands.command(name="forcepick", description="Admin ability to force a draft pick (ADMIN)")
   async def forceDraftPick(self, interaction:discord.Interaction, team_number: str):
@@ -597,7 +604,7 @@ class Admin(commands.Cog):
         playerAuthToDelete.delete()
         session.commit()
         session.close()
-        await interaction.response.send_message(f"Successfully removed {user.name} from league.")
+        await interaction.response.send_message(f"Successfully removed <@{user.name}> from league.", ephemeral=True)
       else:
         await interaction.response.send_message("Player is not on a team.")
 
@@ -629,6 +636,168 @@ class Admin(commands.Cog):
       manageTeamCog = manageteam.ManageTeam(self.bot)
       await manageTeamCog.renameTeamTask(interaction, fantasyId=fantasyteamid, newname=newname)
 
+  @app_commands.command(name="locklineups", description="Admin ability to lock lineups for the week (ADMIN)")
+  async def lockLineups(self, interaction:discord.Interaction):
+    if (await self.verifyAdmin(interaction)):
+      currentWeek = await self.bot.getCurrentWeek()
+      if currentWeek == None:
+        await interaction.response.send_message("No active week")
+        return
+      session = await self.bot.get_session()
+      weekToMod = session.query(WeekStatus).filter(WeekStatus.year==currentWeek.year).filter(WeekStatus.week==currentWeek.week).first()
+      weekToMod.lineups_locked=True
+      session.commit()
+      session.close()
+      await interaction.response.send_message(f"Locked lineups for week {currentWeek.week} in {currentWeek.year}")
+
+  @app_commands.command(name="finishweek", description="Admin ability to deactivate the currently active week (ADMIN)")
+  async def finishWeek(self, interaction:discord.Interaction):
+    if (await self.verifyAdmin(interaction)):
+      currentWeek = await self.bot.getCurrentWeek()
+      if currentWeek == None:
+        await interaction.response.send_message("No active week")
+        return
+      session = await self.bot.get_session()
+      weekToMod = session.query(WeekStatus).filter(WeekStatus.year==currentWeek.year).filter(WeekStatus.week==currentWeek.week).first()
+      weekToMod.active=False
+      session.commit()
+      session.close()
+      await interaction.response.send_message(f"Deactivated week {currentWeek.week} in {currentWeek.year}")
+
+  @app_commands.command(name="finalizescores", description="Admin ability to deactivate the currently active week (ADMIN)")
+  async def finalizeScores(self, interaction:discord.Interaction, week: int):
+    if (await self.verifyAdmin(interaction)):
+      currentWeek = await self.bot.getCurrentWeek()
+      if currentWeek == None:
+        await interaction.response.send_message("No active season")
+        return
+      session = await self.bot.get_session()
+      weekToMod = session.query(WeekStatus).filter(WeekStatus.year==currentWeek.year).filter(WeekStatus.week==week).first()
+      weekToMod.active=False
+      session.commit()
+      session.close()
+      await interaction.response.send_message(f"Finalized week {currentWeek.week} scores in {currentWeek.year}")
+  
+  @app_commands.command(name="remind", description="Remind players to set their lineups (ADMIN)")
+  async def remindPlayers(self, interaction:discord.Interaction):
+    if (await self.verifyAdmin(interaction)):
+      await interaction.response.send_message("Reminding all users with unfilled lineups to fill them.")
+      session = await self.bot.get_session()
+      leagues = session.query(League).where(League.active == True)
+      if (leagues.count() == 0):
+        await interaction.channel.send(content="There are no active leagues!")
+      else:  
+        for league in leagues.all():
+          sendReminder = False
+          reminderMessage = "Teams with unfilled lineups:\n"
+          leagueTeams = session.query(FantasyTeam).where(FantasyTeam.league_id==league.league_id)
+          for team in leagueTeams.all():
+            numberOfStarters = session.query(TeamStarted).filter(TeamStarted.fantasy_team_id == team.fantasy_team_id)
+            if (numberOfStarters.count() < league.team_starts):
+              sendReminder = True
+              playersToNotify = session.query(PlayerAuthorized).filter(PlayerAuthorized.fantasy_team_id == team.fantasy_team_id)
+              reminderMessage+=f"{team.fantasy_team_name} "
+              for player in playersToNotify.all():
+                reminderMessage+=f"<@{player.player_id}> "
+              reminderMessage+=f"currently starting {numberOfStarters.count()} of {league.team_starts}\n"
+          if sendReminder:
+            channel = await self.bot.fetch_channel(int(league.discord_channel))
+            if not channel == None:
+              await channel.send(content=reminderMessage)
+      session.close()
+
+  @app_commands.command(name="processwaivers", description="Process all waivers (ADMIN)")
+  async def processWaivers(self, interaction: discord.Interaction):
+    if (await self.verifyAdmin(interaction)):
+      await interaction.response.send_message(f"Attempting to process waivers")
+      message = await interaction.original_response()
+      session = await self.bot.get_session()
+      leagues = session.query(League).where(League.active == True)
+      week: WeekStatus = await self.bot.getCurrentWeek()
+      if (week.waivers_complete):
+        await message.edit("Waivers are already complete for this week.")
+        return
+      if (leagues.count() == 0):
+        await message.edit(content="There are no active leagues!")
+      else:  
+        for league in leagues.all():
+          waiverReportEmbed = Embed(title=f"**{league.league_name} Week {week.week} Waiver Report**", description="")
+          waiverClaims = session.query(WaiverClaim).filter(WaiverClaim.league_id==league.league_id)
+          if (waiverClaims.count() > 0):
+            waiverNum=1
+            waiverPriorities = session.query(WaiverPriority).filter(WaiverPriority.league_id==league.league_id).order_by(WaiverPriority.priority.asc())
+            lastTeam = waiverPriorities.count()
+            while(waiverNum <= lastTeam):
+              waiverPriorities = session.query(WaiverPriority).filter(WaiverPriority.league_id==league.league_id).order_by(WaiverPriority.priority.asc())
+              currentPriority = waiverPriorities.filter(WaiverPriority.priority==waiverNum)
+              priorityToCheck = currentPriority.first()
+              fantasyTeam: FantasyTeam = priorityToCheck.fantasy_team
+              waiverClaims = session.query(WaiverClaim).filter(WaiverClaim.fantasy_team_id==fantasyTeam.fantasy_team_id).order_by(WaiverClaim.priority.asc())
+              if (waiverClaims.count() > 0):
+                for waiverclaim in waiverClaims.all():
+                  isTeamOnWaivers = session.query(TeamOnWaivers).filter(TeamOnWaivers.league_id==league.league_id).filter(TeamOnWaivers.team_number==waiverclaim.team_claimed)
+                  isDropTeamOnRoster = session.query(TeamOwned).filter(TeamOwned.fantasy_team_id==fantasyTeam.fantasy_team_id).filter(TeamOwned.team_key==waiverclaim.team_to_drop)
+                  if (isTeamOnWaivers.count() > 0 and isDropTeamOnRoster.count() > 0):
+                    newWaiver = TeamOnWaivers(league_id=fantasyTeam.league_id, team_number=waiverclaim.team_to_drop)
+                    session.add(newWaiver)
+                    isTeamOnWaivers.delete()
+                    session.flush()
+                    session.query(TeamStarted).filter(TeamStarted.league_id==fantasyTeam.league_id)\
+                    .filter(TeamStarted.team_number==waiverclaim.team_to_drop).filter(TeamStarted.week >= week.week).delete()
+                    session.flush()
+                    session.query(TeamOwned).filter(TeamOwned.league_id==fantasyTeam.league_id).filter(TeamOwned.team_key==waiverclaim.team_to_drop).delete()
+                    draftSoNotFail: Draft = session.query(Draft).filter(Draft.league_id==fantasyTeam.league_id).filter(Draft.event_key=="fim").first()
+                    session.flush()
+                    newTeamToAdd = TeamOwned(
+                        team_key=str(waiverclaim.team_claimed),
+                        fantasy_team_id=fantasyTeam.fantasy_team_id,
+                        league_id=fantasyTeam.league_id,
+                        draft_id=draftSoNotFail.draft_id
+                    )
+                    session.add(newTeamToAdd)
+                    session.flush()  
+                    waiverReportEmbed.description+=f"{fantasyTeam.fantasy_team_name} successfully added team {waiverclaim.team_claimed} and dropped {waiverclaim.team_to_drop}!\n"
+                    session.flush()
+                    #move waiver priority
+                    # Temporary placeholder value (e.g., set to -1 for the current priority)
+                    priorityToCheck.priority = -1
+                    session.flush()
+
+                    # Now adjust all priorities (e.g., shift them down)
+                    for prio in waiverPriorities.filter(WaiverPriority.priority > waiverNum).all():
+                        prio.priority -= 1
+                        session.flush()
+
+                    # Finally, assign the last priority to the current team
+                    priorityToCheck.priority = lastTeam
+                    session.flush()
+                    break
+                  elif (isTeamOnWaivers.count() == 0):
+                    waiverReportEmbed.description+=f"{fantasyTeam.fantasy_team_name} tried to claim team {waiverclaim.team_claimed}, however they are no longer on waivers, unable to process\n"
+                    session.delete(waiverclaim)
+                    session.flush()
+                  else:
+                    waiverReportEmbed.description+=f"{fantasyTeam.fantasy_team_name} tried to claim team {waiverclaim.team_claimed} but their designated drop team {waiverclaim.team_to_drop} is no longer on the team, unable to process\n"
+                    session.delete(waiverclaim)
+                    session.flush()
+              else:
+                waiverNum+=1
+          else:
+            waiverReportEmbed.description+="No waiver claims to process"
+          channel = await self.bot.fetch_channel(int(league.discord_channel))
+          if not channel == None:
+            await channel.send(embed=waiverReportEmbed)
+          session.query(TeamOnWaivers).filter(TeamOnWaivers.league_id==league.league_id).delete()
+          session.flush()
+      session.commit()
+      session.close()
+
+  @app_commands.command(name="forceadddrop", description="Force an add/drop (ADMIN)")
+  async def forceAddDrop(self, interaction: discord.Interaction, fantasyteamid: int, addteam: str, dropteam: str, towaivers: bool = True):
+    if (await self.verifyAdmin(interaction)):
+      await interaction.response.send_message(f"Attempting to admin drop {dropteam} to add {addteam} from team id {fantasyteamid}", ephemeral=True)
+      manageTeamCog = manageteam.ManageTeam(self.bot)
+      await manageTeamCog.addDropTeamTask(interaction, addTeam=addteam,dropTeam=dropteam, fantasyId=fantasyteamid, force=True, toWaivers=towaivers)
 
 async def setup(bot: commands.Bot) -> None:
   cog = Admin(bot)

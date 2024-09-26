@@ -8,7 +8,8 @@ import os
 import threading
 import aiohttp
 import json
-from models.scores import League, FantasyTeam
+from models.scores import League, FantasyTeam, WeekStatus
+from models.transactions import WaiverPriority
 from discord import Embed
 
 logger = logging.getLogger('discord')
@@ -36,20 +37,49 @@ class General(commands.Cog):
     await interaction.response.send_message(embed=embed)
     session.close()
 
-  @app_commands.command(name="teamids", description="Reports on teams in the channel's league and their team IDs.")
-  async def getTeamsInLeagues(self, interaction: discord.Interaction):
+  @app_commands.command(name="teams", description="Reports on teams in the channel's league and their team IDs.")
+  async def getTeamsInLeague(self, interaction: discord.Interaction, waivers: bool = False):
     session = await self.bot.get_session()
     league = session.query(League).where(League.discord_channel==str(interaction.channel_id))
     if (league.count() == 0):
       await interaction.response.send_message("No league associated with this channel")
     leagueid = league.first().league_id
-    fantasyTeams = session.query(FantasyTeam).where(FantasyTeam.league_id==leagueid).order_by(FantasyTeam.fantasy_team_id.asc()).all()
-    draftOrderEmbed = Embed(title=f"**Teams in {league.first().league_name}**", description="```Team ID     Team Name (id)\n")
-    for team in fantasyTeams:
-      draftOrderEmbed.description+=f"{team.fantasy_team_id:>7d}:    {team.fantasy_team_name}\n"
+    draftOrderEmbed = Embed(title=f"**Teams in {league.first().league_name}**", description=f"```{'Team ID':7s}{'':5s}{'Team Name (id)':30s}{'Waiver':^6s}\n")
+    if (waivers == False):
+      fantasyTeams = session.query(FantasyTeam).where(FantasyTeam.league_id==leagueid).order_by(FantasyTeam.fantasy_team_id.asc()).all()
+      for team in fantasyTeams:
+        waiverprio = team.waiver_priority.priority
+        draftOrderEmbed.description+=f"{team.fantasy_team_id:>7d}{'':5s}{team.fantasy_team_name:30s}{waiverprio:^6d}\n"
+    else:
+      fantasyTeams = session.query(WaiverPriority).where(WaiverPriority.league_id==leagueid).order_by(WaiverPriority.priority.asc()).all()
+      for team in fantasyTeams:
+        waiverprio = team.priority
+        fantasyTeam = team.fantasy_team
+        draftOrderEmbed.description+=f"{fantasyTeam.fantasy_team_id:>7d}{'':5s}{fantasyTeam.fantasy_team_name:30s}{waiverprio:^6d}\n"    
     draftOrderEmbed.description+="```"
     await interaction.response.send_message(embed=draftOrderEmbed)
     session.close()
+
+  @app_commands.command(name="weekstatus", description="Reports on the status of the current fantasy FiM week")
+  async def getWeekStatus(self, interaction: discord.Interaction):
+    currentWeek: WeekStatus = await self.bot.getCurrentWeek()
+    embed = Embed(title=f"**Current Week: Week {currentWeek.week} of {currentWeek.year}**", description="")
+    embed.description += "Waivers: "
+    if currentWeek.waivers_complete:
+      embed.description += "PROCESSED"
+    else:
+      embed.description += "ACTIVE"
+    embed.description += "\nLineup Setting: "
+    if currentWeek.lineups_locked:
+      embed.description += "LOCKED\nScores Finalized: "
+      if currentWeek.waivers_complete:
+        embed.description += "FINALIZED"
+      else:
+        embed.description += "IN PROCESS"
+    else:
+      embed.description += "ACTIVE"
+    embed.description += "\n"
+    await interaction.response.send_message(embed=embed)
 
 async def setup(bot: commands.Bot) -> None:
   cog = General(bot)

@@ -3,9 +3,12 @@ from discord import app_commands, Embed
 from discord.ext import commands
 import logging
 import os
-from models.scores import TeamOwned, TeamScore, FRCEvent, FantasyTeam, TeamStarted, PlayerAuthorized, League
+from models.scores import *
 from models.users import Player
+from models.transactions import WaiverClaim, TeamOnWaivers, WaiverPriority
+from models.draft import Draft
 from sqlalchemy import delete
+from sqlalchemy.sql import text
 
 logger = logging.getLogger('discord')
 STATESWEEK = 6
@@ -15,6 +18,15 @@ MAXSTARTS = 2
 class ManageTeam(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+    
+    def getWaiverClaimPriority(self, fantasyId):
+        stmt = text(f"select max(priority) from waiverclaim\
+                     where fantasy_team_id={fantasyId}")
+        result = self.bot.session.execute(stmt).first()[0]
+        if not result == None:
+            return int(result) + 1
+        else:
+            return 1
 
     async def postTeamBoard(self, interaction: discord.Interaction, fantasyTeam: int):
         session = await self.bot.get_session()
@@ -74,7 +86,7 @@ class ManageTeam(commands.Cog):
             await deferred.edit(content="You do not own this team.")
             session.close()
             return
-        teamsStartedRecords = session.query(TeamStarted).filter(TeamStarted.fantasy_team==fantasyId).filter(TeamStarted.week==week)
+        teamsStartedRecords = session.query(TeamStarted).filter(TeamStarted.fantasy_team_id==fantasyId).filter(TeamStarted.week==week)
         if ((league.team_starts <= teamsStartedRecords.count() and week < STATESWEEK) or (league.team_starts + STATESEXTRA <= teamsStartedRecords.count() and week == STATESWEEK)):
             await deferred.edit(content="Already starting max number of teams this week.")
         else:
@@ -85,11 +97,11 @@ class ManageTeam(commands.Cog):
             teamcompeting = session.query(TeamScore).filter(TeamScore.team_key==frcteam)\
                 .filter(TeamScore.event_key.in_(eventList))
             #is your team already starting?
-            alreadyStarting = teamsStartedRecords.filter(TeamStarted.team==frcteam).count()
+            alreadyStarting = teamsStartedRecords.filter(TeamStarted.team_number==frcteam).count()
             #has your team been started twice this year already?
             teamStartedCount = session.query(TeamStarted)\
-                .filter(TeamStarted.league==league.league_id)\
-                .filter(TeamStarted.team==frcteam)\
+                .filter(TeamStarted.league_id==league.league_id)\
+                .filter(TeamStarted.team_number==frcteam)\
                 .filter(TeamStarted.week < STATESWEEK)
             if (teamcompeting.count() == 0):
                 await deferred.edit(content="This team is not competing this week!")
@@ -102,7 +114,7 @@ class ManageTeam(commands.Cog):
             else:
                 eventkey = teamcompeting.first().event_key
                 frcevent: FRCEvent = session.query(FRCEvent).filter(FRCEvent.event_key==eventkey).first()
-                teamStartedToAdd = TeamStarted(fantasy_team=fantasyId, team=frcteam, league=league.league_id, event=eventkey, week=week)
+                teamStartedToAdd = TeamStarted(fantasy_team_id=fantasyId, team_number=frcteam, league_id=league.league_id, event_key=eventkey, week=week)
                 session.add(teamStartedToAdd)
                 session.commit()
                 await deferred.edit(content=f"{fantasyteam.fantasy_team_name} is starting team {frcteam} competing at {frcevent.event_name} in week {week}!")
@@ -120,20 +132,19 @@ class ManageTeam(commands.Cog):
             return
         #is this team actually starting for you?
         teamstarted = session.query(TeamStarted)\
-                .filter(TeamStarted.team==frcteam)\
-                .filter(TeamStarted.league==league.league_id)\
-                .filter(TeamStarted.fantasy_team==fantasyId)\
+                .filter(TeamStarted.team_number==frcteam)\
+                .filter(TeamStarted.league_id==league.league_id)\
+                .filter(TeamStarted.fantasy_team_id==fantasyId)\
                 .filter(TeamStarted.week==week)
         if (teamstarted.count() == 0):
             await deferred.edit(content="You are not currently starting this team.")
         elif (teamstarted.count() > 1):
             await deferred.edit(content="Please contact a fantasy admin to sit your team. You are starting them at multiple FiM events this week which is a special case.")
         else:
-            eventkey = teamstarted.first().event
-            frcevent: FRCEvent = session.query(FRCEvent).filter(FRCEvent.event_key==eventkey).first()
+            event: FRCEvent = teamstarted.first().event
             teamstarted.delete()
             session.commit()
-            await deferred.edit(content=f"{fantasyteam.fantasy_team_name} is sitting team {frcteam} competing at {frcevent.event_name} in week {week}.")
+            await deferred.edit(content=f"{fantasyteam.fantasy_team_name} is sitting team {frcteam} competing at {event.event_name} in week {week}.")
         session.close()
 
     async def renameTeamTask(self, interaction: discord.Interaction, newname: str, fantasyId: int):
@@ -150,10 +161,10 @@ class ManageTeam(commands.Cog):
         session = await self.bot.get_session()
         # retrieve league starts data
         fantasyteam: FantasyTeam = session.query(FantasyTeam).filter(FantasyTeam.fantasy_team_id==fantasyId).first()
-        league: League = session.query(League).filter(League.league_id==fantasyteam.league_id).first()
+        league: League = fantasyteam.league
         teamsToStart = league.team_starts
         #retrieve teamstarted for team
-        teamsStarted = session.query(TeamStarted).filter(TeamStarted.fantasy_team==fantasyId)
+        teamsStarted = session.query(TeamStarted).filter(TeamStarted.fantasy_team_id==fantasyId)
         # for every week
         embed = Embed(title=f"**{fantasyteam.fantasy_team_name} Starting Lineups**", description=f"```{'':^8s}")
         for team in range(1, teamsToStart+STATESEXTRA+1):
@@ -172,7 +183,7 @@ class ManageTeam(commands.Cog):
                     lineToAdd.append("-----")
             count = 0
             for start in weekTeamsStarted:
-                lineToAdd[count] = start.team
+                lineToAdd[count] = start.team.team_number
                 count += 1
             embed.description+=f"{f'Week {week}':^8s}"
             for k in range(teamsToStart+STATESEXTRA):
@@ -186,17 +197,128 @@ class ManageTeam(commands.Cog):
         await response.edit(embed=embed, content="")
         session.close()
 
-    async def addDropTeamTask(self, interaction: discord.Interaction, addTeam: str, dropTeam: str, fantasyId: int):
+    async def viewMyClaimsTask(self, interaction: discord.Interaction, fantasyId: int):
+        session = await self.bot.get_session()
+        # retrieve waiver claim data
+        response = await interaction.original_response()
+        waiverClaims = session.query(WaiverClaim).filter(WaiverClaim.fantasy_team_id==fantasyId).order_by(WaiverClaim.priority.asc())
+        if waiverClaims.count() == 0:
+            await response.edit(content="You currently have no active claims.")
+            return
+        waiverPriority: WaiverPriority = session.query(WaiverPriority).filter(WaiverPriority.fantasy_team_id==fantasyId).first()
+        embed = Embed(title=f"**Waiver Claims - Team Priority: {waiverPriority.priority}**", description=f"```{'Priority':^12s}{'Claimed Team':^16s}{'Team to drop':^16s}\n")
+        for claim in waiverClaims.all():
+            embed.description+=f"{claim.priority:^12d}{claim.team_claimed:^16s}{claim.team_to_drop:^16s}\n"
+        embed.description+="```"
+        await response.edit(embed=embed, content="")
+        session.close()
+
+    async def addDropTeamTask(self, interaction: discord.Interaction, addTeam: str, dropTeam: str, fantasyId: int, force: bool = False, toWaivers: bool = True):
+        session = await self.bot.get_session()
+        message = await interaction.original_response()
+        currentWeek = await self.bot.getCurrentWeek()
+        if currentWeek.lineups_locked == True:
+            message.edit(content="Cannot make transaction with locked lineups.")
         #check if own dropTeam
-
-        #check if addTeam is available to be picked up
-
-        #remove dropTeam from any future starts
-
-        #drop dropTeam and place dropTeam on waivers
-
+        teamDropOwned = session.query(TeamOwned)\
+            .filter(TeamOwned.team_key==str(dropTeam))\
+            .filter(TeamOwned.fantasy_team_id==fantasyId)
+        fantasyTeam: FantasyTeam = session.query(FantasyTeam).filter(FantasyTeam.fantasy_team_id==fantasyId).first()
+        teamsOnWaivers = session.query(TeamOnWaivers).filter(TeamOnWaivers.team_number==str(addTeam)).filter(TeamOnWaivers.league_id==fantasyTeam.league_id) #on waivers
+        teamAddOwnedByOther = session.query(TeamOwned).filter(TeamOwned.league_id==fantasyTeam.league_id).filter(TeamOwned.team_key==str(addTeam)) #on team already
+        teamInFiM = session.query(Team).filter(Team.team_number==str(addTeam)).filter(Team.is_fim==True) #is in fim
+        if (teamDropOwned.count() == 0):
+            await message.edit(content="You do not own the team you are attempting to drop!")
+        elif (teamsOnWaivers.count() > 0 and not force):
+            await message.edit(content="Team is on waivers. Please submit a claim instead.")
+        elif (teamAddOwnedByOther.count() > 0):
+            await message.edit(content="This team is already owned.")
+        elif (teamInFiM.count() == 0):
+            await message.edit(content="This team is not in FiM.")
+        else:
+            if toWaivers:
+                newWaiver = TeamOnWaivers(league_id=fantasyTeam.league_id, team_number=dropTeam)
+                session.add(newWaiver)
+            if force:
+                session.query(TeamOnWaivers).filter(TeamOnWaivers.team_number==str(addTeam)).filter(TeamOnWaivers.league_id==fantasyTeam.league_id).delete()
+                session.flush()
+            session.query(TeamStarted).filter(TeamStarted.league_id==fantasyTeam.league_id)\
+            .filter(TeamStarted.team_number==dropTeam).filter(TeamStarted.week >= currentWeek.week).delete()
+            session.flush()
+            session.query(TeamOwned).filter(TeamOwned.league_id==fantasyTeam.league_id).filter(TeamOwned.team_key==dropTeam).delete()
+            draftSoNotFail: Draft = session.query(Draft).filter(Draft.league_id==fantasyTeam.league_id).filter(Draft.event_key=="fim").first()
+            session.flush()
+            newTeamToAdd = TeamOwned(
+                team_key=str(addTeam),
+                fantasy_team_id=fantasyId,
+                league_id=fantasyTeam.league_id,
+                draft_id=draftSoNotFail.draft_id
+            )
+            session.add(newTeamToAdd)
+            session.flush()  # Try flushing to see if the error occurs here
+            await message.channel.send(content=f"{fantasyTeam.fantasy_team_name} successfully added team {addTeam} and dropped {dropTeam}!")
+            session.commit()
         #add addTeam
-        pass
+        session.close()
+
+    async def makeWaiverClaimTask(self, interaction: discord.Interaction, fantasyId: int, addTeam: str, dropTeam: str):
+        session = await self.bot.get_session()
+        #get original message to edit
+        originalMessage = await interaction.original_response()
+        #check if addTeam is on waivers
+        fantasyTeam: FantasyTeam = session.query(FantasyTeam).filter(FantasyTeam.fantasy_team_id==fantasyId).first()
+        teamsOnWaivers = session.query(TeamOnWaivers).filter(TeamOnWaivers.team_number==addTeam).filter(TeamOnWaivers.league_id==fantasyTeam.league_id)
+        teamowned = session.query(TeamOwned)\
+                .filter(TeamOwned.team_key==dropTeam)\
+                .filter(TeamOwned.fantasy_team_id==fantasyId)
+        waiverClaimAlreadyMade = session.query(WaiverClaim)\
+                .filter(WaiverClaim.fantasy_team_id==fantasyId)\
+                .filter(WaiverClaim.team_claimed==addTeam)\
+                .filter(WaiverClaim.team_to_drop==dropTeam)
+        if (teamsOnWaivers.count() == 0):
+            await originalMessage.edit(content=f"Team {addTeam} is not on waivers!")
+        #check if own dropTeam
+        elif (teamowned.count() == 0):
+            await originalMessage.edit(content=f"You do not own team {dropTeam}.")
+        #check if already made exact waiver claim
+        elif (waiverClaimAlreadyMade.count() > 0):
+            await originalMessage.edit(content=f"You have already made this claim!")
+        #create waiver claim
+        else:
+            
+            waiverClaim = WaiverClaim(fantasy_team_id=fantasyId,\
+                                      league_id=fantasyTeam.league_id, team_claimed=addTeam,\
+                                        team_to_drop=dropTeam, priority=self.getWaiverClaimPriority(fantasyId))
+            session.add(waiverClaim)
+            await originalMessage.edit(content=f"Successfully created claim for {addTeam}!")
+            session.commit()
+        #close session
+        session.close()
+
+    async def cancelClaimTask(self, interaction: discord.Interaction, fantasyId: int, priority: int):
+        session = await self.bot.get_session()
+        #get original message to edit
+        originalMessage = await interaction.original_response()
+        #check if claim id exists
+        waiverClaimExists = session.query(WaiverClaim)\
+                .filter(WaiverClaim.fantasy_team_id==fantasyId)\
+                .filter(WaiverClaim.priority>=priority)
+        
+        if (waiverClaimExists.filter(WaiverClaim.priority==priority).count() == 0):
+            await originalMessage.edit(content=f"You do not have a claim with this priority!")
+        #create waiver claim
+        else:
+            claimToCancel = waiverClaimExists.first()
+            addTeam = claimToCancel.team_claimed
+            dropTeam = claimToCancel.team_to_drop
+            waiverClaimExists.filter(WaiverClaim.priority==priority).delete()
+            claimsToShift = waiverClaimExists.filter(WaiverClaim.priority>priority).all()
+            for claim in claimsToShift:
+                claim.priority-=1
+            await originalMessage.edit(content=f"Successfully canceled claim for {addTeam} which was dropping {dropTeam}")
+            session.commit()
+        #close session
+        session.close()
 
     @app_commands.command(name="viewteam", description="View a fantasy team and when their FRC teams compete")
     async def viewATeam(self, interaction: discord.Interaction, fantasyteam: int):
@@ -205,7 +327,7 @@ class ManageTeam(commands.Cog):
 
     @app_commands.command(name="myteam", description="View your fantasy team and when their FRC teams compete")
     async def viewMyTeam(self, interaction: discord.Interaction):
-        await interaction.response.send_message("Collecting fantasy team board")
+        await interaction.response.send_message("Collecting fantasy team board", ephemeral=True)
         teamId = await self.getFantasyTeamIdFromInteraction(interaction=interaction)
         if not teamId == None:
             await self.postTeamBoard(interaction, teamId)
@@ -276,15 +398,15 @@ class ManageTeam(commands.Cog):
             await self.renameTeamTask(interaction, newname, teamId)
 
     @app_commands.command(name="adddrop", description="Add/drop a team to/from your roster!")
-    async def addDrop(self, interaction:discord.Interaction, addteam: int, dropteam: int):
-        await interaction.response.send_message(f"Attempting to drop {dropteam} to add {addteam}")
+    async def addDrop(self, interaction:discord.Interaction, addteam: str, dropteam: str):
+        await interaction.response.send_message(f"Attempting to drop {dropteam} to add {addteam}", ephemeral=True)
         originalResponse = await interaction.original_response()
         teamId = await self.getFantasyTeamIdFromInteraction(interaction)
         if teamId == None:
             await originalResponse.edit(content="You are not in this league!")
             return
         else:
-            await self.addDropTeamTask(interaction, addteam, dropteam, teamId)
+            await self.addDropTeamTask(interaction, addTeam=addteam,dropTeam=dropteam, fantasyId=teamId)
 
     @app_commands.command(name="lineup", description="View your starting lineups")
     async def startingLineups(self, interaction:discord.Interaction):
@@ -297,6 +419,38 @@ class ManageTeam(commands.Cog):
         else:
             await self.viewStartsTask(interaction, teamId)
 
+    @app_commands.command(name="claim", description="Make a waiver claim (only shown to you)")
+    async def makeWaiverClaim(self, interaction:discord.Interaction, teamtoclaim: str, teamtodrop: str):
+        await interaction.response.send_message(f"Attempting to make a claim for team {teamtoclaim}, dropping {teamtodrop}", ephemeral=True)
+        originalResponse = await interaction.original_response()
+        teamId = await self.getFantasyTeamIdFromInteraction(interaction)
+        if teamId == None:
+            await originalResponse.edit(content="You are not in this league!")
+            return
+        else:
+            await self.makeWaiverClaimTask(interaction, teamId, teamtoclaim, teamtodrop)
+
+    @app_commands.command(name="myclaims", description="View your waiver claims (only shown to you)")
+    async def viewMyClaims(self, interaction:discord.Interaction):
+        await interaction.response.send_message(f"Retrieving your claims", ephemeral=True)
+        originalResponse = await interaction.original_response()
+        teamId = await self.getFantasyTeamIdFromInteraction(interaction)
+        if teamId == None:
+            await originalResponse.edit(content="You are not in this league!")
+            return
+        else:
+            await self.viewMyClaimsTask(interaction, teamId)
+
+    @app_commands.command(name="cancelclaim", description="Cancel an active claim (only shown to you)")
+    async def cancelClaim(self, interaction:discord.Interaction, priority: int):
+        await interaction.response.send_message(f"Attempting to cancel claim with priority {priority}", ephemeral=True)
+        originalResponse = await interaction.original_response()
+        teamId = await self.getFantasyTeamIdFromInteraction(interaction)
+        if teamId == None:
+            await originalResponse.edit(content="You are not in this league!")
+            return
+        else:
+            await self.cancelClaimTask(interaction, teamId, priority)
 
 async def setup(bot: commands.Bot) -> None:
   cog = ManageTeam(bot)

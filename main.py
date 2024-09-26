@@ -8,8 +8,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
 from models.base import Base
-from models.scores import PlayerAuthorized, League, FantasyTeam
-from models.draft import DraftPick, Draft
+from models.scores import PlayerAuthorized, League, FantasyTeam, WeekStatus
 
 load_dotenv()
 
@@ -27,7 +26,7 @@ class FantasyFiMBot(commands.Bot):
                          intents=discord.Intents.all(),
                          applpication_id=os.getenv("DISCORD_APPLICATION_ID"))
 
-        self.engine = create_engine(url=conn_str, pool_size=20, max_overflow=40)
+        self.engine = create_engine(url=conn_str, pool_size=20, max_overflow=40, pool_pre_ping=True, pool_recycle=300)
         self.session = self.engine.connect()
         Base.metadata.create_all(self.engine)
 
@@ -98,7 +97,12 @@ class FantasyFiMBot(commands.Bot):
         session.close()
         return True  # The user is not part of the league
 
-    
+    async def getCurrentWeek(self) -> WeekStatus:
+        session = await self.get_session()
+        week = session.query(WeekStatus).filter(WeekStatus.active==True).order_by(WeekStatus.year.asc()).order_by(WeekStatus.week.asc()).first()
+        session.close() 
+        return week
+
     async def setup_hook(self):
         await self.load_extension("cogs.general")
         await self.load_extension("cogs.scores")

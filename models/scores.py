@@ -1,5 +1,5 @@
 from sqlalchemy import Boolean, ForeignKey, String, Integer
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 import json
 from .base import Base
 
@@ -38,6 +38,9 @@ class TeamScore(Base):
   rookie_points: Mapped[int] = mapped_column(Integer(), nullable=False, default=0)
   stat_correction: Mapped[int] = mapped_column(Integer(), nullable=False, default=0)
   event_finished: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=False)
+
+  team = relationship("Team")
+  event = relationship("FRCEvent")
 
   def score_team(self):
     return self.qual_points+self.alliance_points+self.elim_points+\
@@ -82,6 +85,10 @@ class FantasyTeam(Base):
   fantasy_team_name: Mapped[str] = mapped_column(String(255), nullable=False)
   league_id: Mapped[int] = mapped_column(ForeignKey("league.league_id"), nullable=False)
 
+  waiver_priority = relationship("WaiverPriority", back_populates="fantasy_team", uselist=False)
+
+  league = relationship("League")
+
 class TeamOwned(Base):
   __tablename__ = "teamowned"
   team_key: Mapped[str] = mapped_column(ForeignKey("teams.team_number"), primary_key=True)
@@ -90,21 +97,43 @@ class TeamOwned(Base):
   league_id: Mapped[int] = mapped_column(ForeignKey("league.league_id"),primary_key=True)
   draft_id: Mapped[int] = mapped_column(ForeignKey("draft.draft_id"), primary_key=True)
   
+  team = relationship("Team")
+  fantasyTeam = relationship("FantasyTeam")
+  league = relationship("League")
+  draft = relationship("Draft")
+
   def __str__(self):
     return str(self.team_key) + " is owned by " + str(self.fantasy_team_id) + " in " +\
                                 str(self.league_id)
 
 class TeamStarted(Base):
   __tablename__ = "teamstarted"
-  fantasy_team: Mapped[int] = mapped_column(ForeignKey("fantasyteam.fantasy_team_id"),\
+  fantasy_team_id: Mapped[int] = mapped_column(ForeignKey("fantasyteam.fantasy_team_id"),\
                                             primary_key=True)
-  team: Mapped[str] = mapped_column(ForeignKey("teams.team_number"), primary_key=True)
-  league: Mapped[int] = mapped_column(ForeignKey("league.league_id"), primary_key=True)
-  event: Mapped[str] = mapped_column(ForeignKey("frcevent.event_key"), primary_key=True)
+  team_number: Mapped[str] = mapped_column(ForeignKey("teams.team_number"), primary_key=True)
+  league_id: Mapped[int] = mapped_column(ForeignKey("league.league_id"), primary_key=True)
+  event_key: Mapped[str] = mapped_column(ForeignKey("frcevent.event_key"), primary_key=True)
   week: Mapped[int] = mapped_column(Integer(), nullable=False, default=0, primary_key=True)
+
+  fantasyTeam = relationship("FantasyTeam")
+  team = relationship("Team")
+  league = relationship("League")
+  event = relationship("FRCEvent")
+
 
 class PlayerAuthorized(Base):
   __tablename__ = "playerauthorized"
   player_id: Mapped[str] = mapped_column(ForeignKey("players.user_id"),
                                         primary_key=True)
   fantasy_team_id: Mapped[int] = mapped_column(ForeignKey("fantasyteam.fantasy_team_id"), primary_key=True)
+
+  fantasyTeam = relationship("FantasyTeam")
+
+class WeekStatus(Base):
+  __tablename__ = "weekstatus"
+  year: Mapped[int] = mapped_column(Integer(), primary_key=True)
+  week: Mapped[int] = mapped_column(Integer(), primary_key=True)
+  waivers_complete: Mapped[bool] = mapped_column(Boolean())
+  lineups_locked: Mapped[bool] = mapped_column(Boolean())
+  scores_finalized: Mapped[bool] = mapped_column(Boolean())
+  active: Mapped[bool] = mapped_column(Boolean())

@@ -5,10 +5,11 @@ import logging
 import os
 from models.scores import *
 from models.users import Player
-from models.transactions import WaiverClaim, TeamOnWaivers, WaiverPriority
+from models.transactions import WaiverClaim, TeamOnWaivers, WaiverPriority, TradeProposal, TradeTeams
 from models.draft import Draft
 from sqlalchemy import delete
 from sqlalchemy.sql import text
+from datetime import datetime, timedelta
 
 logger = logging.getLogger('discord')
 STATESWEEK = 6
@@ -30,9 +31,10 @@ class ManageTeam(commands.Cog):
 
     async def postTeamBoard(self, interaction: discord.Interaction, fantasyTeam: int):
         session = await self.bot.get_session()
+        message = await interaction.original_response()
         fantasyTeamResult = session.query(FantasyTeam).filter(FantasyTeam.fantasy_team_id==fantasyTeam)
         if (fantasyTeamResult.count() == 0):
-            await interaction.channel.send("Invalid team id")
+            await message.edit(content="Invalid team id")
             return
         fTeamFirst = fantasyTeamResult.first()
         teamBoardEmbed = Embed(title=f"**{fTeamFirst.fantasy_team_name} Week-by-Week board**", description="```")
@@ -50,7 +52,7 @@ class ManageTeam(commands.Cog):
                         weeks[int(frcEvent.week)-1] = "2 Events"
             teamBoardEmbed.description+=f"{team.team_key:>4s}{'':1s}{weeks[0]:^9s}{'':1s}{weeks[1]:^9s}{'':1s}{weeks[2]:^9s}{'':1s}{weeks[3]:^9s}{'':1s}{weeks[4]:^9}\n"
         teamBoardEmbed.description += "```"
-        await interaction.channel.send(embed=teamBoardEmbed)
+        await message.edit(embed=teamBoardEmbed, content="")
         session.close()
 
     async def getFantasyTeamIdFromInteraction(self, interaction: discord.Interaction):
@@ -74,7 +76,17 @@ class ManageTeam(commands.Cog):
         league: League = session.query(League).filter(League.league_id==fantasyteam.league_id).first()
         #is this a fim season long league?
         if (not league.is_fim):
-            await deferred.edit("This league does not support starts/sits.")
+            await deferred.edit(content="This league does not support starts/sits.")
+            session.close()
+            return
+        
+        # Check if lineups are locked for the given week in this league
+        week_status = session.query(WeekStatus)\
+            .filter(WeekStatus.year == league.year)\
+            .filter(WeekStatus.week == week).first()
+
+        if week_status and week_status.lineups_locked:
+            await deferred.edit(content="Lineups are locked for this week, you cannot modify your lineup at this time.")
             session.close()
             return
         #do you own the team?
@@ -127,9 +139,20 @@ class ManageTeam(commands.Cog):
         league: League = session.query(League).filter(League.league_id==fantasyteam.league_id).first()
         #is this a fim season long league?
         if (not league.is_fim):
-            await deferred.edit("This league does not support starts/sits.")
+            await deferred.edit(content="This league does not support starts/sits.")
             session.close()
             return
+        
+        # Check if lineups are locked for the given week in this league
+        week_status = session.query(WeekStatus)\
+            .filter(WeekStatus.year == league.year)\
+            .filter(WeekStatus.week == week).first()
+
+        if week_status and week_status.lineups_locked:
+            await deferred.edit(content="Lineups are locked for this week, you cannot modify your lineup at this time.")
+            session.close()
+            return
+        
         #is this team actually starting for you?
         teamstarted = session.query(TeamStarted)\
                 .filter(TeamStarted.team_number==frcteam)\
@@ -218,7 +241,8 @@ class ManageTeam(commands.Cog):
         message = await interaction.original_response()
         currentWeek = await self.bot.getCurrentWeek()
         if currentWeek.lineups_locked == True:
-            message.edit(content="Cannot make transaction with locked lineups.")
+            await message.edit(content="Cannot make transaction with locked lineups.")
+            return
         #check if own dropTeam
         teamDropOwned = session.query(TeamOwned)\
             .filter(TeamOwned.team_key==str(dropTeam))\
@@ -320,6 +344,178 @@ class ManageTeam(commands.Cog):
         #close session
         session.close()
 
+    async def createTradeProposalTask(self, interaction: discord.Interaction, fantasyId: int, otherFantasyId: int, teamsOffered: str, teamsRequested: str, force: bool = False) -> TradeProposal:
+        session = await self.bot.get_session()
+        originalMessage = await interaction.original_response()
+        # Check if lineups are locked for the given week in this league
+        week_status = await self.bot.getCurrentWeek()
+
+        if week_status and week_status.lineups_locked:
+            await originalMessage.edit(content="Lineups are locked for this week, you cannot modify your lineup at this time.")
+            session.close()
+            return
+        proposer_team: FantasyTeam = session.query(FantasyTeam).filter(FantasyTeam.fantasy_team_id==fantasyId).first()
+        proposed_to_team: FantasyTeam = session.query(FantasyTeam).filter(FantasyTeam.fantasy_team_id==otherFantasyId)\
+            .filter(FantasyTeam.league_id==proposer_team.league_id).first()
+        if not proposer_team and not proposed_to_team:
+            await originalMessage.edit(content=f"Invalid fantasy team ID provided.")
+            return
+        expiration_time = datetime.now() + timedelta(hours=1)
+
+        new_trade = TradeProposal(
+            league_id=proposer_team.league_id,
+            proposer_team_id=fantasyId,
+            proposed_to_team_id=otherFantasyId,
+            expiration=expiration_time
+        )
+        session.add(new_trade)
+        session.flush()
+        offeredTeamsList = [team.strip() for team in teamsOffered.split(',')]
+        requestedTeamsList = [team.strip() for team in teamsRequested.split(',')]
+
+        if not len(offeredTeamsList) == len(requestedTeamsList):
+            await originalMessage.edit(content="Must offer the exact same amount of teams.")
+            session.close()
+            return
+
+        tradeProposalEmbed = Embed(title="**Trade Proposal Alert!**", description="")
+        offerText = f"**{proposer_team.fantasy_team_name} is offering the following teams:**\n"
+        teamsInTradeCount = len(offeredTeamsList)
+        i = 1
+        # Validate that the proposer owns the offered teams
+        for team_key in offeredTeamsList:
+            ownership = session.query(TeamOwned).filter_by(team_key=team_key, fantasy_team_id=fantasyId).first()
+            if not ownership:
+                await originalMessage.edit(content=f"Team {team_key} is not owned by the proposer.")
+                return
+            new_trade_team = TradeTeams(
+                trade_id=new_trade.trade_id,
+                team_key=team_key,
+                is_offered=True
+            )
+            offerText+=f"{team_key}"
+            if (i < teamsInTradeCount):
+                offerText+=", "
+            else:
+                offerText+="\n"
+            session.add(new_trade_team)
+            i+=1
+        requestTeamText = f"**{proposed_to_team.fantasy_team_name} would send in return the following teams:**\n"
+        # Validate that the proposed-to team owns the requested teams
+        i=1
+        for team_key in requestedTeamsList:
+            ownership = session.query(TeamOwned).filter_by(team_key=team_key, fantasy_team_id=otherFantasyId).first()
+            if not ownership:
+                await originalMessage.edit(content=f"Team {team_key} is not owned by the proposed-to team.")
+                return
+            new_trade_team = TradeTeams(
+                trade_id=new_trade.trade_id,
+                team_key=team_key,
+                is_offered=False
+            )
+            requestTeamText+=f"{team_key}"
+            if (i < teamsInTradeCount):
+                requestTeamText+=", "
+            else:
+                requestTeamText+="\n"
+            session.add(new_trade_team)
+            i+=1
+        acceptText=f"**If you wish to accept, use command `/accept {new_trade.trade_id}` within 1 hour.**\n"
+        declineText=f"*If you wish to decline, use command `/decline {new_trade.trade_id}`.*\n"
+        tradeProposalEmbed.description+=offerText+requestTeamText+acceptText+declineText
+        #add notifs for other team
+        playersToNotif = session.query(PlayerAuthorized).filter(PlayerAuthorized.fantasy_team_id==otherFantasyId)
+        notifText = ""
+        for player in playersToNotif.all():
+            notifText += f"<@{player.player_id}> "
+        if not force:
+            await interaction.channel.send(embed=tradeProposalEmbed, content=notifText)
+        # Commit all the teams involved in the trade
+        session.commit()
+        tradeProp = session.query(TradeProposal).filter(TradeProposal.trade_id==new_trade.trade_id).first()
+        session.close() 
+        if force:
+            return tradeProp
+
+    async def declineTradeTask(self, interaction: discord.Interaction, fantasyId: int, tradeId: int):
+        session = await self.bot.get_session()
+        message = await interaction.original_response()
+        tradeProposal = session.query(TradeProposal).filter(TradeProposal.proposed_to_team_id==fantasyId).filter(TradeProposal.trade_id==tradeId)
+        if tradeProposal.count() > 0:
+            session.query(TradeTeams).filter(TradeTeams.trade_id==tradeId).delete()
+            session.flush()
+            tradeProposal.delete()
+            session.commit()
+            await interaction.channel.send(f"Trade proposal {tradeId} declined.")
+        else:
+            await message.edit(content=f"You did not have a pending proposal with id {tradeId}.")
+        session.close()
+
+    async def acceptTradeTask(self, interaction: discord.Interaction, fantasyId: int, tradeId: int, force:bool = False):
+        session = await self.bot.get_session()
+        message = await interaction.original_response()
+        tradeProposal = session.query(TradeProposal).filter(TradeProposal.proposed_to_team_id==fantasyId).filter(TradeProposal.trade_id==tradeId)
+        proposalObj = tradeProposal.first()
+        currentWeek = await self.bot.getCurrentWeek()
+        if (currentWeek.lineups_locked == True and not force):
+            await message.edit("Cannot accept a trade while lineups are locked!")
+            return
+        if force or tradeProposal.count() > 0:
+            offeredTeamsList = session.query(TradeTeams).filter(TradeTeams.trade_id==tradeId).filter(TradeTeams.is_offered==True).all()
+            requestedTeamsList = session.query(TradeTeams).filter(TradeTeams.trade_id==tradeId).filter(TradeTeams.is_offered==False).all()
+            #add trade transaction logic
+            # Validate that the proposer owns the offered teams
+            tradeConfirmedEmbed = Embed(title="**Trade Alert!**", description="")
+            offerText = f"**{proposalObj.proposer_team.fantasy_team_name} is sending the following teams:**\n"
+            teamsInTradeCount = len(offeredTeamsList)
+            i = 1
+            for tradeTeam in offeredTeamsList:
+                ownership = session.query(TeamOwned).filter(TeamOwned.team_key==tradeTeam.team_key).filter(TeamOwned.fantasy_team_id==proposalObj.proposer_team_id).first()
+                if not ownership:
+                    await message.edit(content=f"Team {tradeTeam.team_key} is no longer owned by the proposer.")
+                    return
+                ownership.fantasy_team_id=proposalObj.proposed_to_team_id
+                session.flush()
+                session.query(TeamStarted).filter(TeamStarted.week>=currentWeek.week)\
+                    .filter(TeamStarted.fantasy_team_id==proposalObj.proposer_team_id)\
+                    .filter(TeamStarted.team_number==ownership.team_key)\
+                        .delete()
+                offerText+=f"{tradeTeam.team_key}"
+                if (i < teamsInTradeCount):
+                    offerText+=", "
+                else:
+                    offerText+="\n"
+                i+=1
+            requestTeamText = f"**{proposalObj.proposed_to_team.fantasy_team_name} is sending the following teams in return:**\n"
+            # Validate that the proposed-to team owns the requested teams
+            i=1
+            for tradeTeam in requestedTeamsList:
+                ownership = session.query(TeamOwned).filter(TeamOwned.team_key==tradeTeam.team_key).filter(TeamOwned.fantasy_team_id==fantasyId).first()
+                if not ownership:
+                    await message.edit(content=f"Team {tradeTeam.team_key} is no longer owned by the proposed-to team.")
+                    return
+                ownership.fantasy_team_id=proposalObj.proposer_team_id
+                session.flush()
+                session.query(TeamStarted).filter(TeamStarted.week>=currentWeek.week)\
+                    .filter(TeamStarted.fantasy_team_id==proposalObj.proposed_to_team_id)\
+                    .filter(TeamStarted.team_number==ownership.team_key)\
+                    .delete()
+                requestTeamText+=f"{tradeTeam.team_key}"
+                if (i < teamsInTradeCount):
+                    requestTeamText+=", "
+                else:
+                    requestTeamText+="\n"
+                i+=1
+            session.query(TradeTeams).filter(TradeTeams.trade_id==tradeId).delete()
+            session.flush()
+            tradeProposal.delete()
+            session.commit()
+            tradeConfirmedEmbed.description+=offerText+requestTeamText
+            await interaction.channel.send(embed=tradeConfirmedEmbed)
+        else:
+            await message.edit(content=f"You did not have a pending proposal with id {tradeId}.")
+        session.close()
+
     @app_commands.command(name="viewteam", description="View a fantasy team and when their FRC teams compete")
     async def viewATeam(self, interaction: discord.Interaction, fantasyteam: int):
         await interaction.response.send_message("Collecting fantasy team board")
@@ -337,7 +533,7 @@ class ManageTeam(commands.Cog):
 
     @app_commands.command(name="start", description="Put team in starting lineup for week")
     async def startTeam(self, interaction: discord.Interaction, week: int, frcteam: str):
-        await interaction.response.send_message(f"Attempting to place {frcteam} in starting lineup.")
+        await interaction.response.send_message(f"Attempting to place {frcteam} in starting lineup.", ephemeral=True)
         originalResponse = await interaction.original_response()
         teamId = await self.getFantasyTeamIdFromInteraction(interaction)
         if teamId == None:
@@ -348,7 +544,7 @@ class ManageTeam(commands.Cog):
 
     @app_commands.command(name="sit", description="Remove team from starting lineup for week")
     async def sitTeam(self, interaction: discord.Interaction, week: int, frcteam: str):
-        await interaction.response.send_message(f"Attempting to remove {frcteam} from starting lineup.")
+        await interaction.response.send_message(f"Attempting to remove {frcteam} from starting lineup.", ephemeral=True)
         originalResponse = await interaction.original_response()
         teamId = await self.getFantasyTeamIdFromInteraction(interaction)
         if teamId == None:
@@ -410,7 +606,7 @@ class ManageTeam(commands.Cog):
 
     @app_commands.command(name="lineup", description="View your starting lineups")
     async def startingLineups(self, interaction:discord.Interaction):
-        await interaction.response.send_message(f"Retrieving starting lineups...")
+        await interaction.response.send_message(f"Retrieving starting lineups...", ephemeral=True)
         originalResponse = await interaction.original_response()
         teamId = await self.getFantasyTeamIdFromInteraction(interaction)
         if teamId == None:
@@ -451,6 +647,39 @@ class ManageTeam(commands.Cog):
             return
         else:
             await self.cancelClaimTask(interaction, teamId, priority)
+
+    @app_commands.command(name="proposetrade", description="Propose a trade to another team (tag a player on the team)")
+    async def proposeTrade(self, interaction:discord.Interaction, otherfantasyid: int, offered_teams: str, requested_teams: str):
+        await interaction.response.send_message("Building trade proposal...", ephemeral=True)
+        originalResponse = await interaction.original_response()
+        teamId = await self.getFantasyTeamIdFromInteraction(interaction)
+        if teamId == None:
+            await originalResponse.edit(content="You are not in this league!")
+            return
+        else:
+            await self.createTradeProposalTask(interaction, teamId, otherfantasyid, offered_teams, requested_teams)
+
+    @app_commands.command(name="decline", description="Decline a trade")
+    async def declineTrade(self, interaction: discord.Interaction, tradeid: int):
+        await interaction.response.send_message("Declining trade...", ephemeral=True)
+        originalResponse = await interaction.original_response()
+        teamId = await self.getFantasyTeamIdFromInteraction(interaction)
+        if teamId == None:
+            await originalResponse.edit(content="You are not in this league!")
+            return
+        else:
+            await self.declineTradeTask(interaction, teamId, tradeid)
+
+    @app_commands.command(name="accept", description="Accept a trade proposal")
+    async def acceptTrade(self, interaction: discord.Interaction, tradeid: int):
+        await interaction.response.send_message("Accepting trade...", ephemeral=True)
+        originalResponse = await interaction.original_response()
+        teamId = await self.getFantasyTeamIdFromInteraction(interaction)
+        if teamId == None:
+            await originalResponse.edit(content="You are not in this league!")
+            return
+        else:
+            await self.acceptTradeTask(interaction, teamId, tradeid)
 
 async def setup(bot: commands.Bot) -> None:
   cog = ManageTeam(bot)

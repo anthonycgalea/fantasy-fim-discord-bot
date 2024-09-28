@@ -8,7 +8,7 @@ import os
 import threading
 import aiohttp
 import json
-from models.scores import League, FantasyTeam, WeekStatus
+from models.scores import League, FantasyTeam, WeekStatus, FantasyScores
 from models.transactions import WaiverPriority
 from discord import Embed
 
@@ -64,15 +64,10 @@ class General(commands.Cog):
   async def getWeekStatus(self, interaction: discord.Interaction):
     currentWeek: WeekStatus = await self.bot.getCurrentWeek()
     embed = Embed(title=f"**Current Week: Week {currentWeek.week} of {currentWeek.year}**", description="")
-    embed.description += "Waivers: "
-    if currentWeek.waivers_complete:
-      embed.description += "PROCESSED"
-    else:
-      embed.description += "ACTIVE"
-    embed.description += "\nLineup Setting: "
+    embed.description += "Lineup Setting: "
     if currentWeek.lineups_locked:
       embed.description += "LOCKED\nScores Finalized: "
-      if currentWeek.waivers_complete:
+      if currentWeek.scores_finalized:
         embed.description += "FINALIZED"
       else:
         embed.description += "IN PROCESS"
@@ -80,6 +75,62 @@ class General(commands.Cog):
       embed.description += "ACTIVE"
     embed.description += "\n"
     await interaction.response.send_message(embed=embed)
+
+  @app_commands.command(name="getstandings", description="Reports on the rankings for the league in this channel")
+  async def getLeagueStandingsTask(self, interaction: discord.Interaction, week: int):
+    await interaction.response.send_message(f"Retrieving standings as of week {week}")
+    session = await self.bot.get_session()
+    league = session.query(League).filter(League.is_fim == True, League.active == True, League.discord_channel==str(interaction.channel_id)).first()
+    if league:
+        year = league.year
+        week_status = session.query(WeekStatus).filter(WeekStatus.year == year, WeekStatus.week == week).first()
+        if not week_status:
+            await interaction.followup.send(f"No status found for week {week} in year {year}.")
+            session.close()
+            return
+        fantasy_teams = session.query(FantasyTeam).filter(FantasyTeam.league_id == league.league_id).all()
+        standings = []
+        for fantasy_team in fantasy_teams:
+            # Get scores up to the specified week
+            scores = session.query(FantasyScores).filter(
+                FantasyScores.fantasy_team_id == fantasy_team.fantasy_team_id,
+                FantasyScores.week <= week
+            ).all()
+            # Calculate total score and tiebreaker
+            total_score = sum(score.rank_points for score in scores)  # Total score based on rank points
+            tiebreaker = sum(score.weekly_score for score in scores)  # Tiebreaker based on weekly score
+
+            standings.append({
+                'team_name': fantasy_team.fantasy_team_name,
+                'total_score': total_score,
+                'tiebreaker': tiebreaker,
+            })
+
+        # Sort standings first by total score, then by tiebreaker
+        standings.sort(key=lambda x: (-x['total_score'], -x['tiebreaker']))
+
+        # Prepare embed
+        if week_status.scores_finalized:
+            title = f"League Standings up to Week {week} for {league.league_name} ({year})"
+        else:
+            title = f"Unofficial League Standings up to Week {week} for {league.league_name} ({year})"
+
+        embed = Embed(title=title, description="Here are the current standings:")
+
+        for idx, standing in enumerate(standings):
+            embed.add_field(name=f"{idx + 1}. {standing['team_name']}", 
+                            value=f"Total Score (Rank Points): {standing['total_score']} | Tiebreaker (Weekly Score): {standing['tiebreaker']}", 
+                            inline=False)
+
+        # Send the standings embed to the Discord channel
+        channel = self.bot.get_channel(int(league.discord_channel))
+        await channel.send(embed=embed)
+    else:
+      await interaction.channel.send(content="No league associated with this channel!")
+    session.close()
+
+    # Notify the user who triggered the command that the task is complete
+    await interaction.followup.send(f"League standings for {year} up to week {week} have been sent to all active leagues.")
 
 async def setup(bot: commands.Bot) -> None:
   cog = General(bot)

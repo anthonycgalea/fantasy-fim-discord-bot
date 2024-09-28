@@ -1,6 +1,8 @@
-from sqlalchemy import Boolean, ForeignKey, String, Integer
+from sqlalchemy import Boolean, ForeignKey, String, Integer, Double
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import json
+import math
+from scipy.special import erfinv
 from .base import Base
 
 
@@ -62,6 +64,31 @@ class TeamScore(Base):
     json_data["stat_correction"] = self.stat_correction
     json_data["totalScore"] = self.score_team()
     return json.dumps(json_data)
+  
+  def update_qualification_points(self, rank, numTeams, alpha = 1.07):
+    # First, calculate the inner part of the equation
+    term1 = (numTeams - 2*rank + 2) / (alpha * numTeams)
+    term2 = 10 / erfinv(1 / alpha)
+    
+    # Combine the terms and calculate the result
+    result = erfinv(term1) * (term2 + 12)
+    
+    self.qual_points=result
+  
+  def update_alliance_points(self, pick: int=17): #17 if unpicked
+    self.alliance_points=17-pick
+
+  def update_elim_points(self, lost_match_12=False,lost_match_13=False, lost_finals: bool = False, won_finals: bool = False):
+    points = 0
+    if lost_match_12:
+      points=7
+    elif lost_match_13:
+      points=13
+    elif lost_finals:
+      points=20
+    elif won_finals:
+      points=30
+    self.elim_points=points
 
 class League(Base):
   __tablename__ = "league"
@@ -133,7 +160,17 @@ class WeekStatus(Base):
   __tablename__ = "weekstatus"
   year: Mapped[int] = mapped_column(Integer(), primary_key=True)
   week: Mapped[int] = mapped_column(Integer(), primary_key=True)
-  waivers_complete: Mapped[bool] = mapped_column(Boolean())
   lineups_locked: Mapped[bool] = mapped_column(Boolean())
   scores_finalized: Mapped[bool] = mapped_column(Boolean())
   active: Mapped[bool] = mapped_column(Boolean())
+
+class FantasyScores(Base):
+  __tablename__ = "fantasyscores"
+  league_id: Mapped[int] = mapped_column(ForeignKey("league.league_id"), primary_key=True)
+  fantasy_team_id: Mapped[int] = mapped_column(ForeignKey("fantasyteam.fantasy_team_id"), primary_key=True)
+  week: Mapped[int] = mapped_column(Integer(), primary_key=True)
+  rank_points: Mapped[int] = mapped_column(Double())
+  weekly_score: Mapped[int] = mapped_column(Integer())
+  
+  league = relationship("League")
+  fantasyTeam = relationship("FantasyTeam")

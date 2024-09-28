@@ -34,21 +34,6 @@ class TeamOnWaivers(Base):
     league = relationship("League")
     team = relationship("Team")
 
-class TransactionType(Base):
-    __tablename__ = "transactiontype"
-    type_id: Mapped[int] = mapped_column(Integer(), primary_key=True)
-    description: Mapped[int] = mapped_column(String(25), nullable=False)
-
-class Transaction(Base):
-    __tablename__ = "transaction"
-    transaction_id: Mapped[int] = mapped_column(Integer(), primary_key=True)
-    league_id: Mapped[int] = mapped_column(ForeignKey("league.league_id"), primary_key=True)
-    transaction_type: Mapped[int] = mapped_column(ForeignKey("transactiontype.type_id"))
-    fantasy_team_id: Mapped[int] = mapped_column(ForeignKey("fantasyteam.fantasy_team_id"))
-    team_number: Mapped[str] = mapped_column(ForeignKey("teams.team_number"), primary_key=True)
-
-    transactionType = relationship("TransactionType")
-
 class TradeProposal(Base):
     __tablename__ = "tradeproposal"
     
@@ -58,8 +43,7 @@ class TradeProposal(Base):
     proposed_to_team_id: Mapped[int] = mapped_column(ForeignKey("fantasyteam.fantasy_team_id"), nullable=False)
     
     expiration: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    accepted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now(), nullable=False)
 
     proposer_team = relationship("FantasyTeam", foreign_keys=[proposer_team_id])
     proposed_to_team = relationship("FantasyTeam", foreign_keys=[proposed_to_team_id])

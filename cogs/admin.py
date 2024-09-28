@@ -13,9 +13,9 @@ import random, datetime
 import cogs.drafting as drafting
 import cogs.manageteam as manageteam
 from models.users import Player
-from models.scores import Team, League, FRCEvent, TeamScore, FantasyTeam, PlayerAuthorized, WeekStatus, TeamStarted, TeamOwned
+from models.scores import Team, League, FRCEvent, TeamScore, FantasyTeam, PlayerAuthorized, WeekStatus, TeamStarted, TeamOwned, FantasyScores
 from models.draft import Draft, DraftOrder, DraftPick, StatboticsData
-from models.transactions import WaiverPriority, WaiverClaim, TeamOnWaivers
+from models.transactions import WaiverPriority, WaiverClaim, TeamOnWaivers, TradeProposal, TradeTeams
 
 logger = logging.getLogger('discord')
 TBA_API_ENDPOINT = "https://www.thebluealliance.com/api/v3/"
@@ -289,19 +289,21 @@ class Admin(commands.Cog):
 
   async def scoreWeekTask(self, interaction: discord.Interaction, year, week):
     session = await self.bot.get_session()
+    message = await interaction.original_response()
     weekStatus = session.query(WeekStatus).filter(WeekStatus.week==week).filter(WeekStatus.year==year)
     if (weekStatus.count() == 0):
-      await interaction.response.send_message("No week to score.")
+      await message.edit(content="No week to score.")
       return
     elif (weekStatus.first().scores_finalized == True):
-      await interaction.response.send_message("Scores are already finalized.")
+      await message.edit(content="Scores are already finalized.")
       return
     eventsToScore = session.query(FRCEvent).filter(FRCEvent.year==year).filter(FRCEvent.is_fim==True).filter(FRCEvent.week==week)
     embed = Embed(title=f"Scoring week {week} for {year}", description=f"Importing event info for all {year} week {week} districts from The Blue Alliance")
-    await interaction.response.send_message(embed = embed)
+    await message.edit(content="", embed = embed)
     embed.description = ""
     logger.info(f"Events to score: {eventsToScore.count()}")
     for event in eventsToScore.all():
+      logger.info(f"Event to score: {event.event_name}")
       requestURL = TBA_API_ENDPOINT + "event/" + event.event_key + "/district_points"
       reqheaders = {"X-TBA-Auth-Key": TBA_AUTH_KEY}
       eventresponse = requests.get(requestURL, headers=reqheaders).json()
@@ -327,12 +329,208 @@ class Admin(commands.Cog):
             teamscore.rookie_points = 5
           elif (int(team.rookie_year) == int(year)-1):
             teamscore.rookie_points = 2
-        embed.description += f"Successfully scored **{event.event_name}**\n"
-      await interaction.edit_original_response(embed=embed)
+      embed.description += f"Successfully scored **{event.event_name}**\n"
+      await message.edit(embed=embed)
       session.commit() 
     embed.description += f"**All events scored for week {week}**"
-    await interaction.edit_original_response(embed=embed)
+    await message.edit(embed=embed)
     session.close()
+
+  async def scoreAllLeaguesTask(self, interaction: discord.Interaction, year, week, states=False):
+    session = await self.bot.get_session()
+    message = await interaction.original_response()
+    allLeagues = session.query(League).filter(League.is_fim==True).filter(League.year==year).all()
+
+    for league in allLeagues:
+        fantasyTeams = session.query(FantasyTeam).filter(FantasyTeam.league_id==league.league_id).all()
+
+        # Calculate scores for each fantasy team
+        for fantasyTeam in fantasyTeams:
+            teamscore = session.query(FantasyScores).filter(
+                FantasyScores.fantasy_team_id == fantasyTeam.fantasy_team_id
+            ).filter(FantasyScores.week == week).first()
+            if not teamscore:
+                teamscore = FantasyScores(
+                    league_id=league.league_id,
+                    fantasy_team_id=fantasyTeam.fantasy_team_id,
+                    week=week,
+                    rank_points=0,
+                    weekly_score=0
+                )
+                session.add(teamscore)
+                session.flush()
+
+            teamstarts = session.query(TeamStarted).filter(
+                TeamStarted.fantasy_team_id == fantasyTeam.fantasy_team_id
+            ).filter(TeamStarted.week == week).all()
+
+            # Calculate weekly score based on team starts
+            weekly_score = 0
+
+            for start in teamstarts:
+                if states:
+                    # States Week: Count all points across all events the team competes in
+                    team_scores = session.query(TeamScore).join(League).filter(
+                        TeamScore.team_key == start.team_number
+                    ).filter(League.year == year).all()
+                else:
+                    # Pre-States: Only include points for the specific event in TeamStarted
+                    team_scores = session.query(TeamScore).filter(
+                        TeamScore.team_key == start.team_number
+                    ).filter(TeamScore.event_key == start.event_key).all()
+
+                # Sum up the scores for this team
+                for score in team_scores:
+                    weekly_score += score.score_team()
+
+            teamscore.weekly_score = weekly_score
+            session.flush()
+
+        # Retrieve all scores for the league in the current week
+        scoresToRank = session.query(FantasyScores).filter(
+            FantasyScores.league_id == league.league_id
+        ).order_by(FantasyScores.weekly_score.desc()).all()
+
+        # Special case: If this is States, lock the top 3 teams from previous weeks
+        if states:
+            # Calculate cumulative scores up to the current week for the States
+            cumulativeScores = {}
+            for fantasyTeam in fantasyTeams:
+                total_score = session.query(FantasyScores).filter(
+                    FantasyScores.fantasy_team_id == fantasyTeam.fantasy_team_id,
+                    FantasyScores.week < week  # Exclude the current week
+                ).with_entities(FantasyScores.rank_points).all()
+
+                cumulativeScores[fantasyTeam.fantasy_team_id] = sum(score[0] for score in total_score)
+
+            # Get the top 3 teams based on cumulative scores
+            lockedTop3 = sorted(cumulativeScores.items(), key=lambda x: x[1], reverse=True)[:3]
+            lockedTop3TeamIds = [team_id for team_id, _ in lockedTop3]
+
+            # Ensure the top 3 are locked in their positions for this week
+            lockedTeamsRanked = session.query(FantasyScores).filter(
+                FantasyScores.fantasy_team_id.in_(lockedTop3TeamIds),
+                FantasyScores.week == week
+            ).all()
+
+            # Assign rank points manually for locked top 3
+            for i, teamscore in enumerate(lockedTeamsRanked):
+                teamscore.rank_points = len(fantasyTeams) - i  # Assign rank points from the top
+
+            # Remove the top 3 from the scoresToRank, leaving the rest to be ranked normally
+            scoresToRank = [score for score in scoresToRank if score.fantasy_team_id not in lockedTop3TeamIds]
+
+            # Normal ranking for the rest of the teams
+            for i, teamscore in enumerate(scoresToRank):
+                rank = i + len(lockedTop3TeamIds) + 1  # Start rank after the locked top 3
+                # Check for ties
+                if i > 0 and teamscore.weekly_score == scoresToRank[i - 1].weekly_score:
+                    teamscore.rank_points = scoresToRank[i - 1].rank_points  # Same rank as the previous team
+                else:
+                    teamscore.rank_points = len(fantasyTeams) - rank
+
+        session.commit()
+
+    session.close()
+    await message.edit(content=f"Updated all scores for {year} week {week}, {'with states rules applied' if states else ''}")
+
+  async def notifyWeeklyScoresTask(self, interaction: discord.Interaction, year, week):
+    session = await self.bot.get_session()
+    week_status = session.query(WeekStatus).filter(WeekStatus.year == year).filter(WeekStatus.week == week).first()
+    if not week_status:
+        await interaction.followup.send(f"No status found for year {year}, week {week}.")
+        session.close()
+        return
+    leagues = session.query(League).filter(League.is_fim == True).filter(League.active == True).all()
+    for league in leagues:
+        teams = session.query(FantasyScores).filter(FantasyScores.league_id == league.league_id)\
+                    .filter(FantasyScores.week == week)\
+                    .order_by(FantasyScores.weekly_score.desc()).all()
+        if not teams:
+            continue
+        if week_status.scores_finalized:
+            title = f"Week {week} Final Scores for {league.league_name}"
+        else:
+            title = f"Week {week} Unofficial Scores for {league.league_name}"
+        embed = Embed(title=title, description=f"Here are the {'official' if week_status.scores_finalized else 'unofficial'} scores for Week {week}")
+        for idx, team_score in enumerate(teams):
+            fantasy_team = team_score.fantasyTeam
+            embed.add_field(name=f"{idx + 1}. {fantasy_team.fantasy_team_name}", 
+                            value=f"Score: {team_score.weekly_score} points", inline=False)
+        if week_status.scores_finalized:
+            winning_team = teams[0].fantasyTeam
+            winning_score = teams[0].weekly_score
+            playersToNotify = session.query(PlayerAuthorized).filter(PlayerAuthorized.fantasy_team_id==winning_team.fantasy_team_id).all()
+            congrats_message = f"**Congratulations to {winning_team.fantasy_team_name} for winning this week with {winning_score} points!**\n"
+            for player in playersToNotify:
+              congrats_message += f"<@{player.player_id}> "
+
+        else:
+            congrats_message = f"Unofficial scores for Week {week}. Check back later for final results!"
+        channel = self.bot.get_channel(int(league.discord_channel))
+        await channel.send(content=congrats_message, embed=embed)
+    session.close()
+    await interaction.followup.send(f"Weekly scores for Week {week} have been sent to all active leagues.")
+
+  async def getLeagueStandingsTask(self, interaction: discord.Interaction, year, week):
+    session = await self.bot.get_session()
+
+    # Query for the week status to check if scores are finalized
+    week_status = session.query(WeekStatus).filter(WeekStatus.year == year, WeekStatus.week == week).first()
+
+    if not week_status:
+        await interaction.followup.send(f"No status found for week {week} in year {year}.")
+        session.close()
+        return
+
+    leagues = session.query(League).filter(League.is_fim == True, League.active == True).all()
+    
+    for league in leagues:
+        # Retrieve all fantasy teams in the league
+        fantasy_teams = session.query(FantasyTeam).filter(FantasyTeam.league_id == league.league_id).all()
+
+        standings = []
+        for fantasy_team in fantasy_teams:
+            # Get scores up to the specified week
+            scores = session.query(FantasyScores).filter(
+                FantasyScores.fantasy_team_id == fantasy_team.fantasy_team_id,
+                FantasyScores.week <= week
+            ).all()
+
+            # Calculate total score and tiebreaker
+            total_score = sum(score.rank_points for score in scores)  # Total score based on rank points
+            tiebreaker = sum(score.weekly_score for score in scores)  # Tiebreaker based on weekly score
+
+            standings.append({
+                'team_name': fantasy_team.fantasy_team_name,
+                'total_score': total_score,
+                'tiebreaker': tiebreaker,
+            })
+
+        # Sort standings first by total score, then by tiebreaker
+        standings.sort(key=lambda x: (-x['total_score'], -x['tiebreaker']))
+
+        # Prepare embed
+        if week_status.scores_finalized:
+            title = f"League Standings up to Week {week} for {league.league_name} ({year})"
+        else:
+            title = f"Unofficial League Standings up to Week {week} for {league.league_name} ({year})"
+
+        embed = Embed(title=title, description="Here are the current standings:")
+
+        for idx, standing in enumerate(standings):
+            embed.add_field(name=f"{idx + 1}. {standing['team_name']}", 
+                            value=f"Ranking Points: {standing['total_score']} | Tiebreaker (Total Score): {standing['tiebreaker']}", 
+                            inline=False)
+
+        # Send the standings embed to the Discord channel
+        channel = self.bot.get_channel(int(league.discord_channel))
+        await channel.send(embed=embed)
+
+    session.close()
+
+    # Notify the user who triggered the command that the task is complete
+    await interaction.followup.send(f"League standings for {year} up to week {week} have been sent to all active leagues.")
 
   async def verifyAdmin(self, interaction: discord.Interaction):
     stmt = select(Player).where(Player.user_id == str(interaction.user.id))
@@ -385,11 +583,13 @@ class Admin(commands.Cog):
             return None
 
   @app_commands.command(name="updateteamlist", description="Grabs all teams from TBA (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def updateTeamList(self, interaction: discord.Interaction, startpage: int = 0):    
     if (await self.verifyAdmin(interaction)):
       asyncio.create_task(self.updateTeamsTask(interaction, startpage))
       
   @app_commands.command(name="addleague", description="Create a new league (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def createLeague(self, interaction: discord.Interaction, league_name: str, team_limit: int, year: int, is_fim: bool = False, team_starts: int = 3, offseason: bool = False, team_size_limit: int = 3):
     if (await self.verifyAdmin(interaction)):
       forum = await self.getForum()
@@ -405,6 +605,7 @@ class Admin(commands.Cog):
       session.close()
 
   @app_commands.command(name="registerteam", description="Register Fantasy Team (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def registerTeam(self, interaction:discord.Interaction, teamname: str):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
@@ -425,6 +626,7 @@ class Admin(commands.Cog):
       await interaction.response.send_message(f"Team {teamname} created successfully in league with id {leagueid}. Team id is {fantasyTeamToAdd.fantasy_team_id}")
 
   @app_commands.command(name="fillleague", description="Populates a League to the max amount of teams with generic teams (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def populateLeague(self, interaction:discord.Interaction):
       if (await self.verifyAdmin(interaction)):
         session = await self.bot.get_session()
@@ -446,6 +648,7 @@ class Admin(commands.Cog):
         session.close()
 
   @app_commands.command(name="createdraft", description="Creates a fantasy draft for a given League and populates it with picks (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def createDraft(self, interaction:discord.Interaction, event_key: str):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
@@ -487,6 +690,7 @@ class Admin(commands.Cog):
       session.close()      
 
   @app_commands.command(name="startdraft", description="Starts the draft in the current channel (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def startDraft(self, interaction:discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
@@ -517,6 +721,7 @@ class Admin(commands.Cog):
       await draftCog.postDraftBoard(interaction=interaction)
 
   @app_commands.command(name="resetdraft", description="Resets an already started draft. (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def resetDraft(self, interaction:discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
@@ -530,26 +735,41 @@ class Admin(commands.Cog):
     await interaction.response.send_message(f"Successfully reset draft! Use command /startdraft to restart the draft.")
 
   @app_commands.command(name="updateevents", description="Update events for a given year (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def updateEvents(self, interaction: discord.Interaction, year: int):
     if (await self.verifyAdmin(interaction)):
       asyncio.create_task(self.updateEventsTask(interaction, year))
     
   @app_commands.command(name="importoffseasonevent", description="Imports offseason event and team list from TBA (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def importOffseasonEvent(self, interaction: discord.Interaction, eventkey: str):
     if (await self.verifyAdmin(interaction)):
       asyncio.create_task(self.importSingleEventTask(interaction, eventkey))
 
   @app_commands.command(name="importdistrict", description="Pull all registration data for district events and load db (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def importDistrict(self, interaction: discord.Interaction, year: str, district: str = "fim"):
     if (await self.verifyAdmin(interaction)):
       asyncio.create_task(self.importFullDistrctTask(interaction, district, year))
-
-  @app_commands.command(name="scoreweek", description="Score all teams that competed in a given week (ADMIN)")
-  async def scoreWeek(self, interaction:discord.Interaction, year: str, week: str):
-    if (await self.verifyAdmin(interaction)):
-      asyncio.create_task(self.scoreWeekTask(interaction, year, week))
   
+  @app_commands.command(name="scoreupdate", description="Generate a score update for the given week (ADMIN)")
+  async def updateScores(self, interaction: discord.Interaction, year: int, week: int, final: bool=False, states: bool=False):
+    if await self.verifyAdmin(interaction):
+      await interaction.response.send_message(f"Scoring all leagues for {year} week {week}")
+      await self.scoreWeekTask(interaction, year, week)
+      await self.scoreAllLeaguesTask(interaction, year, week, states=states)
+      if final:
+        session = await self.bot.get_session()
+        weekToMod = session.query(WeekStatus).filter(WeekStatus.year==year).filter(WeekStatus.week==week).first()
+        weekToMod.scores_finalized=True
+        session.commit()
+        session.close()
+      await self.notifyWeeklyScoresTask(interaction, year, week)
+      await self.getLeagueStandingsTask(interaction, year, week)
+      
+
   @app_commands.command(name="authorize", description="Add an authorized user to a fantasy team (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def authorizeUser(self, interaction:discord.Interaction, fantasyteamid: int, user: discord.User):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
@@ -569,13 +789,15 @@ class Admin(commands.Cog):
         await interaction.response.send_message("You can't add someone already on it to their own team dummy!", ephemeral=True)
     
   @app_commands.command(name="forcepick", description="Admin ability to force a draft pick (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def forceDraftPick(self, interaction:discord.Interaction, team_number: str):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to force pick team {team_number}.")
       draftCog = drafting.Drafting(self.bot)
       await draftCog.makeDraftPickHandler(interaction=interaction, team_number=team_number, force=True)
 
-  @app_commands.command(name="autopick", description="Admin ability to force an auto draft pick (ADMIN)")    
+  @app_commands.command(name="autopick", description="Admin ability to force an auto draft pick (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin")     
   async def forceAutoPick(self, interaction:discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to force pick best available team.")
@@ -589,12 +811,14 @@ class Admin(commands.Cog):
       teamToPick = suggestedTeams[0][0]
       await draftCog.makeDraftPickHandler(interaction=interaction, team_number=teamToPick, force=True)
 
-  @app_commands.command(name="statboticsupdate", description="Updates cache of Statbotics data (ADMIN)")    
+  @app_commands.command(name="statboticsupdate", description="Updates cache of Statbotics data (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin")     
   async def updateStatbotics(self, interaction:discord.Interaction, year: int):
     if (await self.verifyAdmin(interaction)):
       asyncio.create_task(self.updateStatboticsTask(interaction, year))
 
   @app_commands.command(name="deauthplayer", description="Remove a player from a team (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def deauthPlayer(self, interaction:discord.Interaction, user: discord.User):
     if (await self.verifyAdmin(interaction)):
       if not await self.bot.verifyNotInLeague(interaction, user):
@@ -604,11 +828,12 @@ class Admin(commands.Cog):
         playerAuthToDelete.delete()
         session.commit()
         session.close()
-        await interaction.response.send_message(f"Successfully removed <@{user.name}> from league.", ephemeral=True)
+        await interaction.response.send_message(f"Successfully removed <@{user.id}> from league.", ephemeral=True)
       else:
         await interaction.response.send_message("Player is not on a team.")
 
   @app_commands.command(name="forcestart", description="Admin ability to force a team into a starting lineup (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def forceStart(self, interaction:discord.Interaction, fantasyteamid: int, week: int, team_number: str):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to force start team {team_number}.")
@@ -616,6 +841,7 @@ class Admin(commands.Cog):
       await manageTeamCog.startTeamTask(interaction, team_number, week, fantasyteamid)
 
   @app_commands.command(name="forcesit", description="Admin ability to force a team out of a starting lineup (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def forceSit(self, interaction:discord.Interaction, fantasyteamid: int, week: int, team_number: str):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to force sit team {team_number}.")
@@ -623,6 +849,7 @@ class Admin(commands.Cog):
       await manageTeamCog.sitTeamTask(interaction, team_number, week, fantasyteamid)
 
   @app_commands.command(name="viewteamlineup", description="Admin ability to view a team's starting lineup (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def viewStartingLineup(self, interaction:discord.Interaction, fantasyteamid: int):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to view starting lineup of team {fantasyteamid}.")
@@ -630,6 +857,7 @@ class Admin(commands.Cog):
       await manageTeamCog.viewStartsTask(interaction, fantasyteamid)
 
   @app_commands.command(name="adminrenameteam", description="Admin ability to rename a team (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def renameFantasyTeam(self, interaction:discord.Interaction, fantasyteamid: int, newname: str):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to rename team {fantasyteamid} to {newname}.")
@@ -637,6 +865,7 @@ class Admin(commands.Cog):
       await manageTeamCog.renameTeamTask(interaction, fantasyId=fantasyteamid, newname=newname)
 
   @app_commands.command(name="locklineups", description="Admin ability to lock lineups for the week (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def lockLineups(self, interaction:discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       currentWeek = await self.bot.getCurrentWeek()
@@ -646,11 +875,15 @@ class Admin(commands.Cog):
       session = await self.bot.get_session()
       weekToMod = session.query(WeekStatus).filter(WeekStatus.year==currentWeek.year).filter(WeekStatus.week==currentWeek.week).first()
       weekToMod.lineups_locked=True
+      session.query(TradeTeams).delete()
+      session.flush()
+      session.query(TradeProposal).delete()
       session.commit()
       session.close()
       await interaction.response.send_message(f"Locked lineups for week {currentWeek.week} in {currentWeek.year}")
 
   @app_commands.command(name="finishweek", description="Admin ability to deactivate the currently active week (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def finishWeek(self, interaction:discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       currentWeek = await self.bot.getCurrentWeek()
@@ -663,22 +896,9 @@ class Admin(commands.Cog):
       session.commit()
       session.close()
       await interaction.response.send_message(f"Deactivated week {currentWeek.week} in {currentWeek.year}")
-
-  @app_commands.command(name="finalizescores", description="Admin ability to deactivate the currently active week (ADMIN)")
-  async def finalizeScores(self, interaction:discord.Interaction, week: int):
-    if (await self.verifyAdmin(interaction)):
-      currentWeek = await self.bot.getCurrentWeek()
-      if currentWeek == None:
-        await interaction.response.send_message("No active season")
-        return
-      session = await self.bot.get_session()
-      weekToMod = session.query(WeekStatus).filter(WeekStatus.year==currentWeek.year).filter(WeekStatus.week==week).first()
-      weekToMod.active=False
-      session.commit()
-      session.close()
-      await interaction.response.send_message(f"Finalized week {currentWeek.week} scores in {currentWeek.year}")
   
   @app_commands.command(name="remind", description="Remind players to set their lineups (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def remindPlayers(self, interaction:discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message("Reminding all users with unfilled lineups to fill them.")
@@ -707,6 +927,7 @@ class Admin(commands.Cog):
       session.close()
 
   @app_commands.command(name="processwaivers", description="Process all waivers (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def processWaivers(self, interaction: discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to process waivers")
@@ -714,9 +935,6 @@ class Admin(commands.Cog):
       session = await self.bot.get_session()
       leagues = session.query(League).where(League.active == True)
       week: WeekStatus = await self.bot.getCurrentWeek()
-      if (week.waivers_complete):
-        await message.edit("Waivers are already complete for this week.")
-        return
       if (leagues.count() == 0):
         await message.edit(content="There are no active leagues!")
       else:  
@@ -793,11 +1011,45 @@ class Admin(commands.Cog):
       session.close()
 
   @app_commands.command(name="forceadddrop", description="Force an add/drop (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def forceAddDrop(self, interaction: discord.Interaction, fantasyteamid: int, addteam: str, dropteam: str, towaivers: bool = True):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to admin drop {dropteam} to add {addteam} from team id {fantasyteamid}", ephemeral=True)
       manageTeamCog = manageteam.ManageTeam(self.bot)
       await manageTeamCog.addDropTeamTask(interaction, addTeam=addteam,dropTeam=dropteam, fantasyId=fantasyteamid, force=True, toWaivers=towaivers)
+
+  @app_commands.command(name="forcetrade", description="Force a trade through (ADMIN)")
+  @app_commands.checks.has_role("Fantasy FiM Admin")
+  async def forceTrade(self, interaction: discord.Interaction, teamid1: int, teamid2: int, team1trading: str, team2trading: str):
+    if (await self.verifyAdmin(interaction)):
+      await interaction.response.send_message(f"Attempting to admin force trade {team1trading} force {team2trading} for team ids {teamid1} and {teamid2}", ephemeral=True)
+      manageTeamCog = manageteam.ManageTeam(self.bot)
+      tradeProp: TradeProposal = await manageTeamCog.createTradeProposalTask(interaction, teamid1, teamid2, team1trading, team2trading, force=True)
+      await manageTeamCog.acceptTradeTask(interaction, teamid2, tradeProp.trade_id, force=True)
+
+  @app_commands.command(name="genweeks", description="Generate weeks for a given year (ADMIN)")
+  async def genWeeks(self, interaction: discord.Interaction, year: int, week: int = -1):
+    if (await self.verifyAdmin(interaction)):
+      session = await self.bot.get_session()
+      if week == -1:
+        await interaction.response.send_message(f"Attempting to generate all weeks for {year}")
+        session.query(WeekStatus).filter(WeekStatus.year==year).delete()
+        session.flush()
+        for k in range(1, 7):
+          weekStatToadd = WeekStatus(week=k, year=year, lineups_locked=False, scores_finalized=False, active=True)
+          session.add(weekStatToadd)
+          session.flush()
+      else:
+        await interaction.response.send_message(f"Attempting to generate week {week} for {year}")
+        session.query(WeekStatus).filter(WeekStatus.year==year).filter(WeekStatus.week==week).delete()
+        session.flush()
+        weekStatToadd = WeekStatus(week=week, year=year, lineups_locked=False, scores_finalized=False, active=True)
+        session.add(weekStatToadd)
+        session.flush()
+      msg = await interaction.original_response()
+      session.commit()
+      await msg.edit(content="Success!")
+      session.close()
 
 async def setup(bot: commands.Bot) -> None:
   cog = Admin(bot)

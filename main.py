@@ -4,7 +4,7 @@ from discord import Embed
 import os
 import logging
 import logging.handlers
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
 from models.base import Base

@@ -38,24 +38,34 @@ class General(commands.Cog):
     session.close()
 
   @app_commands.command(name="teams", description="Reports on teams in the channel's league and their team IDs.")
-  async def getTeamsInLeague(self, interaction: discord.Interaction, waivers: bool = False):
+  async def getTeamsInLeague(self, interaction: discord.Interaction):
     session = await self.bot.get_session()
     league = session.query(League).where(League.discord_channel==str(interaction.channel_id))
     if (league.count() == 0):
       await interaction.response.send_message("No league associated with this channel")
     leagueid = league.first().league_id
     draftOrderEmbed = Embed(title=f"**Teams in {league.first().league_name}**", description=f"```{'Team ID':7s}{'':5s}{'Team Name (id)':30s}{'Waiver':^6s}\n")
-    if (waivers == False):
-      fantasyTeams = session.query(FantasyTeam).where(FantasyTeam.league_id==leagueid).order_by(FantasyTeam.fantasy_team_id.asc()).all()
-      for team in fantasyTeams:
-        waiverprio = team.waiver_priority.priority
-        draftOrderEmbed.description+=f"{team.fantasy_team_id:>7d}{'':5s}{team.fantasy_team_name:30s}{waiverprio:^6d}\n"
-    else:
-      fantasyTeams = session.query(WaiverPriority).where(WaiverPriority.league_id==leagueid).order_by(WaiverPriority.priority.asc()).all()
-      for team in fantasyTeams:
-        waiverprio = team.priority
-        fantasyTeam = team.fantasy_team
-        draftOrderEmbed.description+=f"{fantasyTeam.fantasy_team_id:>7d}{'':5s}{fantasyTeam.fantasy_team_name:30s}{waiverprio:^6d}\n"    
+    fantasyTeams = session.query(FantasyTeam).where(FantasyTeam.league_id==leagueid).order_by(FantasyTeam.fantasy_team_id.asc()).all()
+    for team in fantasyTeams:
+      waiverprio = team.waiver_priority.priority
+      draftOrderEmbed.description+=f"{team.fantasy_team_id:>7d}{'':5s}{team.fantasy_team_name:30s}{waiverprio:^6d}\n"  
+    draftOrderEmbed.description+="```"
+    await interaction.response.send_message(embed=draftOrderEmbed)
+    session.close()
+
+  @app_commands.command(name="waiverpriority", description="Reports on teams in the channel's league and their team IDs.")
+  async def waiverPriorityReport(self, interaction: discord.Interaction):
+    session = await self.bot.get_session()
+    league = session.query(League).where(League.discord_channel==str(interaction.channel_id))
+    if (league.count() == 0):
+      await interaction.response.send_message("No league associated with this channel")
+    leagueid = league.first().league_id
+    draftOrderEmbed = Embed(title=f"**Teams in {league.first().league_name}**", description=f"```{'Team ID':7s}{'':5s}{'Team Name (id)':30s}{'Waiver':^6s}\n")
+    fantasyTeams = session.query(WaiverPriority).where(WaiverPriority.league_id==leagueid).order_by(WaiverPriority.priority.asc()).all()
+    for team in fantasyTeams:
+      waiverprio = team.priority
+      fantasyTeam = team.fantasy_team
+      draftOrderEmbed.description+=f"{fantasyTeam.fantasy_team_id:>7d}{'':5s}{fantasyTeam.fantasy_team_name:30s}{waiverprio:^6d}\n"    
     draftOrderEmbed.description+="```"
     await interaction.response.send_message(embed=draftOrderEmbed)
     session.close()
@@ -76,7 +86,7 @@ class General(commands.Cog):
     embed.description += "\n"
     await interaction.response.send_message(embed=embed)
 
-  @app_commands.command(name="getstandings", description="Reports on the rankings for the league in this channel")
+  @app_commands.command(name="standings", description="Reports on the rankings for the league in this channel")
   async def getLeagueStandingsTask(self, interaction: discord.Interaction, week: int):
     await interaction.response.send_message(f"Retrieving standings as of week {week}")
     session = await self.bot.get_session()
@@ -128,9 +138,6 @@ class General(commands.Cog):
     else:
       await interaction.channel.send(content="No league associated with this channel!")
     session.close()
-
-    # Notify the user who triggered the command that the task is complete
-    await interaction.followup.send(f"League standings for {year} up to week {week} have been sent to all active leagues.")
 
 async def setup(bot: commands.Bot) -> None:
   cog = General(bot)

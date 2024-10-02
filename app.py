@@ -1,4 +1,5 @@
 from flask import Flask, jsonify, abort
+from flask_cors import CORS
 from flasgger import Swagger
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -11,6 +12,7 @@ from models.transactions import *
 
 app = Flask(__name__)
 swagger = Swagger(app)
+CORS(app)
 
 # Configure the database
 DATABASE_URL = os.getenv("DATABASE_URL")  # or your database URL
@@ -47,6 +49,46 @@ def get_leagues():
     leagues = session.query(League).filter(League.active==True, League.is_fim==True).all()
     session.close()
     return jsonify([{"league_id": league.league_id, "league_name": league.league_name} for league in leagues])
+
+@app.route('/api/leagues/<int:leagueId>', methods=['GET'])
+def get_league(leagueId):
+    """
+    Retrieve a FIM league's data.
+    ---
+    tags:
+        - Leagues
+    parameters:
+      - name: leagueId
+        in: path
+        type: integer
+        required: true
+        description: The ID of the league for which to retrieve data from.
+    responses:
+      200:
+        description: An active FIM leagues.
+        schema:
+          type: array
+          items:
+            properties:
+              league_id:
+                type: integer
+                example: 1
+              league_name:
+                type: string
+                example: "FRC 2025"
+              weekly_starts:
+                type: int
+                example: 3
+              year:
+                type: int
+                example: 2025
+      500:
+        description: Internal server error.
+    """
+    session = Session()
+    league = session.query(League).filter(League.active==True, League.is_fim==True, League.league_id==leagueId).first()
+    session.close()
+    return jsonify({"league_id": league.league_id, "league_name": league.league_name, "weekly_starts": league.team_starts, "year": league.year} )
 
 @app.route('/api/leagues/<int:leagueId>/fantasyTeams', methods=['GET'])
 def get_fantasy_teams(leagueId):
@@ -172,7 +214,7 @@ def get_rosters(leagueId):
 @app.route('/api/drafts/<int:draftId>/picks', methods=["GET"])
 def get_draft_picks(draftId):
     """
-    Retrieve a list of draft picks for a specific draft.
+    Retrieve a list of draft picks for a specific draft, including the events teams compete in with their weeks.
     ---
     tags:
         - Drafts
@@ -184,7 +226,7 @@ def get_draft_picks(draftId):
         description: The ID of the draft for which to retrieve draft picks.
     responses:
       200:
-        description: A list of draft picks for the specified draft.
+        description: A list of draft picks for the specified draft with their events.
         schema:
           type: array
           items:
@@ -198,16 +240,54 @@ def get_draft_picks(draftId):
               team_picked:
                 type: string
                 example: "frc1234"
+              events:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    event_key:
+                      type: string
+                      example: "2023txda"
+                    week:
+                      type: integer
+                      example: 3
       404:
         description: Draft not found.
       500:
         description: Internal server error.
     """
     session = Session()
-    draftPicks = session.query(DraftPick).filter(DraftPick.draft_id==draftId).order_by(DraftPick.pick_number.asc()).all()
+    
+    # Query for draft picks
+    draft_picks = session.query(DraftPick).filter(DraftPick.draft_id == draftId).order_by(DraftPick.pick_number.asc()).all()
+
+    if not draft_picks:
+        session.close()
+        return jsonify({"error": "Draft not found"}), 404
+
+    # Collect draft pick details with team events
+    picks_data = []
+    for pick in draft_picks:
+        team_events = (
+            session.query(TeamScore.event_key, FRCEvent.week)
+            .join(FRCEvent, TeamScore.event_key == FRCEvent.event_key)
+            .filter(TeamScore.team_key == pick.team_number)
+            .all()
+        )
+        
+        # Format team events into the desired structure
+        events = [{"event_key": event.event_key, "week": event.week} for event in team_events]
+        
+        picks_data.append({
+            "pick_number": pick.pick_number,
+            "fantasy_team_id": pick.fantasy_team_id,
+            "team_picked": pick.team_number,
+            "events": events
+        })
+    
     session.close()
 
-    return jsonify([{"pick_number": pick.pick_number, "fantasy_team_id": pick.fantasy_team_id, "team_picked":pick.team_number} for pick in draftPicks])
+    return jsonify(picks_data)
 
 @app.route('/api/drafts/<int:draftId>/draftOrder', methods=['GET'])
 def get_draft_order(draftId):
@@ -465,6 +545,9 @@ def get_league_rankings(leagueId):
               total_ranking_points:
                 type: number
                 description: Cumulative ranking points for the team.
+              tiebreaker:
+                type: number
+                description: Cumulative weekly score for the team.
               weekly_scores:
                 type: array
                 items:
@@ -510,6 +593,7 @@ def get_league_rankings(leagueId):
         ).order_by(FantasyScores.week.asc()).all()
 
         total_ranking_points = sum(score.rank_points for score in scores)
+        total_weekly_score = sum(score.weekly_score for score in scores)  # Calculate cumulative weekly score
         
         weekly_scores = [{"week": score.week,
                           "ranking_points": score.rank_points,
@@ -519,15 +603,17 @@ def get_league_rankings(leagueId):
             "fantasy_team_id": team.fantasy_team_id,
             "fantasy_team_name": team.fantasy_team_name,
             "total_ranking_points": total_ranking_points,
+            "tiebreaker": total_weekly_score,  # Add cumulative weekly score
             "weekly_scores": weekly_scores
         })
 
-    # Sort by total ranking points in descending order
-    result.sort(key=lambda x: x["total_ranking_points"], reverse=True)
+    # Sort by total ranking points and total weekly score
+    result.sort(key=lambda x: (x["total_ranking_points"], x["tiebreaker"]), reverse=True)
 
     session.close()
 
     return jsonify(result)
+
 
 @app.route('/api/leagues/<int:leagueId>/drafts', methods=['GET'])
 def get_league_drafts(leagueId):
@@ -578,7 +664,7 @@ def get_league_drafts(leagueId):
     # Structure the response data
     result = [{
         "draft_id": draft.draft_id,
-        "round": draft.rounds,
+        "rounds": draft.rounds,
         "event_key": draft.event_key
     } for draft in drafts]
 
@@ -589,10 +675,11 @@ def get_league_drafts(leagueId):
 @app.route('/api/drafts/<int:draftId>/availableTeams', methods=['GET'])
 def get_available_teams(draftId):
     """
-    Retrieve all available teams for a specific draft.
+    Retrieve all available teams for a specific draft, including their registered events and Statbotics data.
     ---
     tags:
       - Drafts
+      - Teams
     parameters:
       - name: draftId
         in: path
@@ -601,7 +688,7 @@ def get_available_teams(draftId):
         description: ID of the draft to retrieve available teams for.
     responses:
       200:
-        description: A list of available teams for the draft.
+        description: A list of available teams for the draft, including events and Statbotics data.
         schema:
           type: array
           items:
@@ -610,6 +697,20 @@ def get_available_teams(draftId):
               team_number:
                 type: integer
                 description: The number of the available team.
+              events:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    event_key:
+                      type: string
+                      description: The key of the event.
+                    week:
+                      type: integer
+                      description: The week of the event.
+              year_end_epa:
+                type: integer
+                description: The year-end EPA from Statbotics data for the previous year.
       404:
         description: Draft not found
     """
@@ -625,43 +726,111 @@ def get_available_teams(draftId):
         isFiM = draft.league.is_fim
         eventKey = draft.event_key
         year = draft.league.year
+        previous_year = year - 1  # Calculate previous year
         
-        if isFiM:
-            stmt = text(f"""
-                SELECT DISTINCT CAST(teams.team_number AS INT) AS team_number
-                FROM teams
-                JOIN teamscore ON teams.team_number = teamscore.team_key
-                JOIN frcevent ON teamscore.event_key = frcevent.event_key
-                WHERE teams.is_fim = {isFiM}
-                AND frcevent.year = {year}
-                AND teams.team_number NOT IN (
-                    SELECT team_number FROM draftpick
-                    WHERE draft_id = :draftId
-                    AND NOT team_number = '-1'
+        # Base query
+        base_query = session.query(
+            Team.team_number,
+            FRCEvent.event_key,
+            FRCEvent.week,
+            StatboticsData.year_end_epa
+        ).join(TeamScore, Team.team_number == TeamScore.team_key).join(
+            FRCEvent, TeamScore.event_key == FRCEvent.event_key
+        ).outerjoin(
+            StatboticsData, (Team.team_number == StatboticsData.team_number) & (StatboticsData.year == previous_year)
+        ).filter(
+            FRCEvent.year == year,
+            Team.team_number.notin_(
+                session.query(DraftPick.team_number).filter(
+                    DraftPick.draft_id == draftId,
+                    DraftPick.team_number != '-1'
                 )
-                ORDER BY CAST(teams.team_number AS INT) ASC
-            """)
-        else:
-            stmt = text(f"""
-                SELECT DISTINCT team_key AS team_number
-                FROM teamscore
-                WHERE event_key = :eventKey
-                AND team_key NOT IN (
-                    SELECT team_number FROM draftpick
-                    WHERE draft_id = :draftId
-                    AND NOT team_number = '-1'
-                )
-                ORDER BY CAST(team_key AS INT) ASC
-            """)
-        
-        # Execute the statement with parameters
-        result = session.execute(stmt, {"draftId": draftId, "eventKey": eventKey}).fetchall()
-        
-        # Extract team numbers from the result
-        available_teams = [row.team_number for row in result]
-        
-        return jsonify(available_teams)
+            )
+        )
 
+        # Add condition for FIM
+        if isFiM:
+            base_query = base_query.filter(Team.is_fim == isFiM)
+
+        # Execute the query and order by year_end_epa descending, with 0s coming last
+        result = base_query.order_by(
+            (StatboticsData.year_end_epa == 0).asc(),  # Place 0s last
+            StatboticsData.year_end_epa.desc(),  # Sort by year_end_epa in descending order
+            Team.team_number.asc()  # Sort by team_number in ascending order
+        ).all()
+
+        # Prepare the available teams list with events and Statbotics data
+        available_teams = {}
+        
+        for row in result:
+            team_number = row.team_number
+            event_key = row.event_key
+            week = row.week
+            year_end_epa = row.year_end_epa if row.year_end_epa is not None else 0  # Set default value if None
+            
+            if team_number not in available_teams:
+                available_teams[team_number] = {"team_number": team_number, "events": [], "year_end_epa": year_end_epa}
+            
+            available_teams[team_number]["events"].append({"event_key": event_key, "week": week})
+        
+        return jsonify(list(available_teams.values()))
+
+
+
+@app.route('/api/drafts/<int:draftId>', methods=['GET'])
+def get_draft_info(draftId):
+    """
+    Retrieve generic information for a specific draft.
+    ---
+    tags:
+      - Drafts
+    parameters:
+      - name: draftId
+        in: path
+        type: integer
+        required: true
+        description: ID of the draft to retrieve information for.
+    responses:
+      200:
+        description: The generic information of the draft.
+        schema:
+          type: object
+          properties:
+            draft_id:
+              type: integer
+              description: The unique identifier for the draft.
+            league_id:
+              type: integer
+              description: The identifier of the league associated with the draft.
+            event_key:
+              type: integer
+              description: The event key associated with the draft.
+            discord_channel:
+              type: string
+              description: The Discord channel linked to the draft.
+            rounds:
+              type: integer
+              description: The number of rounds in the draft.
+      404:
+        description: Draft not found
+    """
+    # Create a new session
+    with Session() as session:
+        # Retrieve the draft to ensure it exists
+        draft = session.query(Draft).filter(Draft.draft_id == draftId).first()
+
+        if draft is None:
+            abort(404, description="Draft not found")
+
+        # Prepare the response data
+        draft_info = {
+            "draft_id": draft.draft_id,
+            "league_id": draft.league_id,
+            "event_key": draft.event_key,
+            "rounds": draft.rounds,
+        }
+
+        return jsonify(draft_info)
 
 
 if __name__ == '__main__':

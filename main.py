@@ -9,6 +9,10 @@ from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
 from models.base import Base
 from models.scores import PlayerAuthorized, League, FantasyTeam, WeekStatus
+import cogs.admin as admin
+import time
+import threading
+
 
 load_dotenv()
 
@@ -30,10 +34,23 @@ class FantasyFiMBot(commands.Bot):
         self.session = self.engine.connect()
         Base.metadata.create_all(self.engine)
 
-    async def log_message(self, title, message):
+    async def log_message(self, title="Title", message="Message", embed: discord.Embed=None):
         logChannel = await self.fetch_channel(int(os.getenv("LOGGING_CHANNEL_ID")))
         embed = Embed(title=f"{title}", description=f"{message}")
+        if not embed == None:
+            embed=embed
         return await logChannel.send(embed = embed)
+
+    def run_scheduled_district_update(self):
+        while True:
+            now = time.localtime()
+            if now.tm_hour == 3 and now.tm_min == 0:
+                self.loop.create_task(self.district_update_job())
+            time.sleep(60)
+
+    async def district_update_job(self):
+        adminCog = admin.Admin(self)
+        await adminCog.importFullDistrctTask("fim", 2025)
 
     async def get_session(self):
         Session = sessionmaker(bind=self.engine)
@@ -116,6 +133,8 @@ class FantasyFiMBot(commands.Bot):
 
         await bot.change_presence(activity=discord.Activity(
             type=discord.ActivityType.competing, name=str("Fantasy FiM!")))
+        
+        threading.Thread(target=self.run_scheduled_district_update, daemon=True).start()
 
         logger.info("Bot startup complete!")
 

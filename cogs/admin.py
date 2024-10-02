@@ -17,6 +17,7 @@ from models.scores import Team, League, FRCEvent, TeamScore, FantasyTeam, Player
 from models.draft import Draft, DraftOrder, DraftPick, StatboticsData
 from models.transactions import WaiverPriority, WaiverClaim, TeamOnWaivers, TradeProposal, TradeTeams
 
+
 logger = logging.getLogger('discord')
 TBA_API_ENDPOINT = "https://www.thebluealliance.com/api/v3/"
 TBA_AUTH_KEY = os.getenv("TBA_API_KEY")
@@ -204,9 +205,9 @@ class Admin(commands.Cog):
       session.close()
       return
 
-  async def importFullDistrctTask(self, interaction, district, year):
+  async def importFullDistrctTask(self, district, year):
     embed = Embed(title=f"Importing {district} District", description=f"Importing event info for all {district} districts from The Blue Alliance")
-    await interaction.response.send_message(embed = embed)
+    originalMessage = await self.bot.log_message(embed = embed)
     newEventsEmbed = Embed(title="New Events", description="No new events")
     eventsLog = await self.bot.log_message("New Events", "No new events")
     reqheaders = {"X-TBA-Auth-Key": TBA_AUTH_KEY}
@@ -216,10 +217,11 @@ class Admin(commands.Cog):
       response = requests.get(requestURL, headers=reqheaders).json()
       if (not isinstance(response, list)):
         embed.description = f"District {district} does not exist on The Blue Alliance"
-        await interaction.edit_original_response(embed=embed)
+        await originalMessage.edit(embed=embed)
         return
       numberOfEvents = len(response)
       i = 1
+      first = True
       for event in response:
         week=int(event["week"])+1
         if week < 6:
@@ -228,8 +230,11 @@ class Admin(commands.Cog):
           year=eventKey[:4]
           eventResult = session.query(FRCEvent).filter(FRCEvent.event_key == eventKey)
           if eventResult.count() == 0:
+            if first:
+              first=False
+              newEventsEmbed.description=""
             logger.info(f"Inserting event {eventKey}: {eventName}")
-            newEventsEmbed.description = f"Found new event {eventKey}: {eventName}"
+            newEventsEmbed.description += f"Found new event {eventKey}: {eventName}\n"
             await eventsLog.edit(embed=newEventsEmbed)
             isFiM = False
             eventToAdd = FRCEvent(event_key=eventKey, event_name=eventName, year=year, week=week, is_fim=isFiM)
@@ -242,7 +247,7 @@ class Admin(commands.Cog):
             eventResult.first().year = year
             eventResult.first().week = week
           embed.description = f"Retrieving {eventKey} teams (Event {i}/{numberOfEvents})"
-          await interaction.edit_original_response(embed=embed)
+          await originalMessage.edit(embed=embed)
           requestURL = TBA_API_ENDPOINT + "event/" + str(eventKey) + "/teams/simple"
           response = requests.get(requestURL, headers=reqheaders).json()
           teamscores = session.query(TeamScore).filter(TeamScore.event_key==eventKey)
@@ -278,11 +283,11 @@ class Admin(commands.Cog):
         i+=1
       session.commit()
       embed.description = f"Retrieved all {district} information"
-      await interaction.edit_original_response(embed=embed)
+      await originalMessage.edit(embed=embed)
       session.close()
     except Exception:
       embed.description = f"Error retrieving offseason event {eventKey} from The Blue Alliance"
-      await interaction.edit_original_response(embed=embed)
+      await originalMessage.edit(embed=embed)
       logger.error(traceback.format_exc())
       session.close()
       return
@@ -750,7 +755,8 @@ class Admin(commands.Cog):
   @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def importDistrict(self, interaction: discord.Interaction, year: str, district: str = "fim"):
     if (await self.verifyAdmin(interaction)):
-      asyncio.create_task(self.importFullDistrctTask(interaction, district, year))
+      await interaction.response.send_message(f"Force updating district {district}")
+      asyncio.create_task(self.importFullDistrctTask(district, year))
   
   @app_commands.command(name="scoreupdate", description="Generate a score update for the given week (ADMIN)")
   async def updateScores(self, interaction: discord.Interaction, year: int, week: int, final: bool=False, states: bool=False):
@@ -893,6 +899,7 @@ class Admin(commands.Cog):
       session = await self.bot.get_session()
       weekToMod = session.query(WeekStatus).filter(WeekStatus.year==currentWeek.year).filter(WeekStatus.week==currentWeek.week).first()
       weekToMod.active=False
+      weekToMod.lock_lineups=True
       session.commit()
       session.close()
       await interaction.response.send_message(f"Deactivated week {currentWeek.week} in {currentWeek.year}")

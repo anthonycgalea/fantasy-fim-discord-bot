@@ -29,6 +29,58 @@ class Admin(commands.Cog):
   def __init__(self, bot):
     self.bot = bot
     
+
+  async def put_teams_on_waivers(self, interaction: discord.Interaction):
+    session = await self.bot.get_session()
+    message = await interaction.original_response()
+    currentWeek = (
+        session.query(WeekStatus)
+        .filter(WeekStatus.active == True)
+        .order_by(WeekStatus.year.asc(), WeekStatus.week.asc())
+        .first()
+    )
+
+    if not currentWeek:
+        await message.channel.send(content="No active weeks found. No teams will be put on waivers.")
+        return
+
+    leagues = session.query(League).filter(
+        League.is_fim == True, League.active == True
+    ).all()
+
+    if not leagues:
+        await message.channel.send(content="No active FIM leagues found. No teams will be put on waivers.")
+        return
+
+    for league in leagues:
+        competing_teams = (
+            session.query(TeamScore.team_key)
+            .join(Team, Team.team_number == TeamScore.team_key)
+            .join(FRCEvent, TeamScore.event_key == FRCEvent.event_key)
+            .filter(Team.is_fim == True, FRCEvent.week == currentWeek.week)
+            .all()
+        )
+
+        teams_to_put_on_waivers = []
+        for team_number in competing_teams:
+            is_owned = session.query(TeamOwned).filter(TeamOwned.league_id==league.league_id, TeamOwned.team_key == team_number[0]).first() is not None
+            is_on_waivers = session.query(TeamOnWaivers).filter(TeamOnWaivers.team_number == team_number[0]).first() is not None
+            
+            if not is_owned and not is_on_waivers:
+                teams_to_put_on_waivers.append(team_number[0])
+
+        if teams_to_put_on_waivers:
+            team_on_waivers_objects = [
+                TeamOnWaivers(league_id=league.league_id, team_number=team_number) 
+                for team_number in teams_to_put_on_waivers
+            ]
+            
+            session.bulk_save_objects(team_on_waivers_objects)
+            session.commit()
+            await message.channel.send(embed=Embed(title=f"Placed teams on waivers for league {league.league_name}",description=f"{teams_to_put_on_waivers}"))
+        else:
+            await message.channel.send(content=f"No teams meet the criteria to be put on waivers for league {league.league_name}.")
+
   async def updateStatboticsTask(self, interaction, year):
     embed = Embed(title="Update Team List", description=f"Updating year end team data from Statbotics for {year}")
     await interaction.response.send_message(embed=embed)
@@ -895,13 +947,16 @@ class Admin(commands.Cog):
       if currentWeek == None:
         await interaction.response.send_message("No active week")
         return
+      await interaction.response.defer()
+      message = await interaction.original_response()
+      await self.put_teams_on_waivers(interaction)
       session = await self.bot.get_session()
       weekToMod = session.query(WeekStatus).filter(WeekStatus.year==currentWeek.year).filter(WeekStatus.week==currentWeek.week).first()
       weekToMod.active=False
       weekToMod.lock_lineups=True
       session.commit()
       session.close()
-      await interaction.response.send_message(f"Deactivated week {currentWeek.week} in {currentWeek.year}")
+      await message.edit(content=f"Deactivated week {currentWeek.week} in {currentWeek.year}")
   
   @app_commands.command(name="remind", description="Remind players to set their lineups (ADMIN)")
   @app_commands.checks.has_role("Fantasy FiM Admin") 
@@ -947,6 +1002,7 @@ class Admin(commands.Cog):
         for league in leagues.all():
           waiverReportEmbed = Embed(title=f"**{league.league_name} Week {week.week} Waiver Report**", description="")
           waiverClaims = session.query(WaiverClaim).filter(WaiverClaim.league_id==league.league_id)
+          teamOnWaiversToAdd = []
           if (waiverClaims.count() > 0):
             waiverNum=1
             waiverPriorities = session.query(WaiverPriority).filter(WaiverPriority.league_id==league.league_id).order_by(WaiverPriority.priority.asc())
@@ -963,7 +1019,8 @@ class Admin(commands.Cog):
                   isDropTeamOnRoster = session.query(TeamOwned).filter(TeamOwned.fantasy_team_id==fantasyTeam.fantasy_team_id).filter(TeamOwned.team_key==waiverclaim.team_to_drop)
                   if (isTeamOnWaivers.count() > 0 and isDropTeamOnRoster.count() > 0):
                     newWaiver = TeamOnWaivers(league_id=fantasyTeam.league_id, team_number=waiverclaim.team_to_drop)
-                    session.add(newWaiver)
+                    teamOnWaiversToAdd.append(newWaiver)
+                    #session.add(newWaiver)
                     isTeamOnWaivers.delete()
                     session.flush()
                     session.query(TeamStarted).filter(TeamStarted.league_id==fantasyTeam.league_id)\
@@ -994,6 +1051,7 @@ class Admin(commands.Cog):
 
                     # Finally, assign the last priority to the current team
                     priorityToCheck.priority = lastTeam
+                    session.delete(waiverclaim)
                     session.flush()
                     break
                   elif (isTeamOnWaivers.count() == 0):
@@ -1012,6 +1070,8 @@ class Admin(commands.Cog):
           if not channel == None:
             await channel.send(embed=waiverReportEmbed)
           session.query(TeamOnWaivers).filter(TeamOnWaivers.league_id==league.league_id).delete()
+          session.flush()
+          session.add_all(teamOnWaiversToAdd)
           session.flush()
       session.commit()
       session.close()

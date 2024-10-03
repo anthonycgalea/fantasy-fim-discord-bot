@@ -1,18 +1,14 @@
-import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands
-import requests
 import logging
 import os
-import threading
-import aiohttp
-import json
 from models.scores import League, FantasyTeam, WeekStatus, FantasyScores
 from models.transactions import WaiverPriority
 from discord import Embed
 
 logger = logging.getLogger('discord')
+websiteURL = os.getenv("WEBSITE_URL")
 
 class General(commands.Cog):
   def __init__(self, bot):
@@ -69,6 +65,20 @@ class General(commands.Cog):
     draftOrderEmbed.description+="```"
     await interaction.response.send_message(embed=draftOrderEmbed)
     session.close()
+
+  @app_commands.command(name="leaguesite", description="Retrieve a link to your league's webpage")
+  async def getLeagueWebpage(self, interaction: discord.Interaction):
+    session = await self.bot.get_session()
+    league = session.query(League).where(League.discord_channel==str(interaction.channel_id))
+    if (league.count() == 0):
+      await interaction.response.send_message("No league associated with this channel")
+    leagueid = league.first().league_id
+    await interaction.response.send_message(f"{websiteURL}/leagues/{leagueid}")
+    session.close()
+
+  @app_commands.command(name="api", description="sends a link to the swagger page for the API")
+  async def getAPI(self, interaction: discord.Interaction):
+    await interaction.response.send_message(f"{websiteURL}/apidocs")
 
   @app_commands.command(name="weekstatus", description="Reports on the status of the current fantasy FiM week")
   async def getWeekStatus(self, interaction: discord.Interaction):

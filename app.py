@@ -9,6 +9,9 @@ from models.base import Base
 from models.scores import *
 from models.draft import *
 from models.transactions import *
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 swagger = Swagger(app)

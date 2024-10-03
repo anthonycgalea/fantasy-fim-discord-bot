@@ -1,14 +1,14 @@
 from flask import Flask, jsonify, abort
 from flask_cors import CORS
 from flasgger import Swagger
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
+from sqlalchemy import cast, Integer
 from sqlalchemy.orm import sessionmaker
 import os
 from models.base import Base
 from models.scores import *
 from models.draft import *
 from models.transactions import *
-#from models.models import Base, User, Message  # Import your models
 
 app = Flask(__name__)
 swagger = Swagger(app)
@@ -42,13 +42,41 @@ def get_leagues():
               league_name:
                 type: string
                 example: "FRC 2024"
+              year:
+                type: integer
+                example: 2024
+              team_limit:
+                type: integer
+                example: 10
+              team_starts:
+                type: integer
+                example: 5
+              is_fim:
+                type: boolean
+                example: true
+              offseason:
+                type: boolean
+                example: false
+              team_size_limit:
+                type: integer
+                example: 6
       500:
         description: Internal server error.
     """
     session = Session()
     leagues = session.query(League).filter(League.active==True, League.is_fim==True).all()
     session.close()
-    return jsonify([{"league_id": league.league_id, "league_name": league.league_name} for league in leagues])
+    
+    return jsonify([{
+        "league_id": league.league_id,
+        "league_name": league.league_name,
+        "year": league.year,
+        "team_limit": league.team_limit,
+        "team_starts": league.team_starts,
+        "is_fim": league.is_fim,
+        "offseason": league.offseason,
+        "team_size_limit": league.team_size_limit
+    } for league in leagues])
 
 @app.route('/api/leagues/<int:leagueId>', methods=['GET'])
 def get_league(leagueId):
@@ -82,13 +110,16 @@ def get_league(leagueId):
               year:
                 type: int
                 example: 2025
+              is_fim:
+                type: bool
+                example: True
       500:
         description: Internal server error.
     """
     session = Session()
     league = session.query(League).filter(League.active==True, League.is_fim==True, League.league_id==leagueId).first()
     session.close()
-    return jsonify({"league_id": league.league_id, "league_name": league.league_name, "weekly_starts": league.team_starts, "year": league.year} )
+    return jsonify({"league_id": league.league_id, "league_name": league.league_name, "weekly_starts": league.team_starts, "year": league.year, "is_fim": league.is_fim} )
 
 @app.route('/api/leagues/<int:leagueId>/fantasyTeams', methods=['GET'])
 def get_fantasy_teams(leagueId):
@@ -129,7 +160,7 @@ def get_fantasy_teams(leagueId):
 @app.route('/api/leagues/<int:leagueId>/teamsOnWaivers', methods=['GET'])
 def get_waiver_teams(leagueId):
     """
-    Retrieve a list of teams on waivers for a specific league.
+    Retrieve a list of teams on waivers for a specific league, including their registered events and Statbotics data.
     ---
     tags:
         - Leagues
@@ -142,27 +173,79 @@ def get_waiver_teams(leagueId):
         description: The ID of the league for which to retrieve teams on waivers.
     responses:
       200:
-        description: A list of teams on waivers for the specified league.
+        description: A list of teams on waivers for the specified league, including events and Statbotics data.
         schema:
-          type: object
-          properties:
-            league_id:
-              type: integer
-              example: 1
-            waiver_teams:
-              type: array
-              items:
+          type: array
+          items:
+            type: object
+            properties:
+              team_number:
                 type: integer
-                example: 1234
+                description: The number of the available team.
+              name:
+                type: string
+                description: The name of the team.
+              events:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    event_key:
+                      type: string
+                      description: The key of the event.
+                    week:
+                      type: integer
+                      description: The week of the event.
       404:
         description: League not found.
-      500:
-        description: Internal server error.
     """
-    session = Session()
-    waiverTeams = session.query(TeamOnWaivers).filter(TeamOnWaivers.league_id==leagueId).all()
-    session.close()
-    return jsonify({"league_id": leagueId, "waiver_teams": [team.team_number for team in waiverTeams]})
+    # Create a new session
+    with Session() as session:
+        # Retrieve the league to ensure it exists
+        league = session.query(League).filter(League.league_id == leagueId).first()
+
+        if league is None:
+            abort(404, description="League not found")
+
+        year = league.year
+
+        # Query to retrieve teams on waivers along with their data, ordered by team_number casted as an integer
+        waiver_teams_query = session.query(
+            Team.team_number,
+            Team.name,  # Add team name
+            FRCEvent.event_key,
+            FRCEvent.week,
+        ).join(TeamOnWaivers, Team.team_number == TeamOnWaivers.team_number).join(
+            TeamScore, Team.team_number == TeamScore.team_key
+        ).join(
+            FRCEvent, TeamScore.event_key == FRCEvent.event_key
+        ).filter(
+            TeamOnWaivers.league_id == leagueId,
+            FRCEvent.year == year
+        ).order_by(
+            cast(Team.team_number, Integer).asc()  # Cast team_number to Integer for sorting
+        ).all()
+
+        # Prepare the teams on waivers list with events and Statbotics data
+        waiver_teams = {}
+
+        for row in waiver_teams_query:
+            team_number = row.team_number
+            team_name = row.name  # Get the team name
+            event_key = row.event_key
+            week = row.week
+
+            if team_number not in waiver_teams:
+                waiver_teams[team_number] = {
+                    "team_number": team_number,
+                    "name": team_name,  # Include team name
+                    "events": []
+                }
+
+            waiver_teams[team_number]["events"].append({"event_key": event_key, "week": week})
+
+        # Return the list of teams on waivers
+        return jsonify(list(waiver_teams.values()))
 
 @app.route('/api/leagues/<int:leagueId>/rosters', methods=["GET"])
 def get_rosters(leagueId):
@@ -334,6 +417,104 @@ def get_draft_order(draftId):
         "draft_slot": draft.draft_slot
     } for draft in draft_order])
 
+@app.route('/api/leagues/<int:leagueId>/lineups', methods=['GET'])
+def get_lineups(leagueId):
+    """
+    Retrieve the lineups for all fantasy teams in a specified league for all weeks.
+
+    ---
+    tags:
+      - Leagues
+    parameters:
+      - name: leagueId
+        in: path
+        required: true
+        description: The ID of the league to retrieve lineups for.
+        type: integer
+    responses:
+      200:
+        description: A list of weeks with fantasy teams and their lineups.
+        schema:
+          type: array
+          items:
+            type: object
+            properties:
+              week:
+                type: integer
+                description: The week number.
+              fantasy_teams:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    fantasy_team_id:
+                      type: integer
+                      description: The ID of the fantasy team.
+                    fantasy_team_name:
+                      type: string
+                      description: The name of the fantasy team.
+                    teams:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          team_number:
+                            type: string
+                            description: The number of the team started.
+      404:
+        description: No fantasy teams found for the specified league.
+      500:
+        description: Internal server error.
+    """
+    session = Session()
+
+    # Query to get all fantasy teams for the given league
+    fantasy_teams = session.query(FantasyTeam).filter(
+        FantasyTeam.league_id == leagueId
+    ).all()
+
+    # Query to get all team started records for the given league
+    started_teams = session.query(TeamStarted).filter(
+        TeamStarted.fantasy_team_id.in_([ft.fantasy_team_id for ft in fantasy_teams])
+    ).all()
+
+    # Organizing the output by week
+    output = {}
+    
+    for week in range(1, 7):  # Weeks 1 to 6 (including MSC week)
+        output[week] = {
+            "week": week,
+            "fantasy_teams": []
+        }
+
+        # Populate each fantasy team entry
+        for fantasy_team in fantasy_teams:
+            fantasy_team_entry = {
+                "fantasy_team_id": fantasy_team.fantasy_team_id,
+                "fantasy_team_name": fantasy_team.fantasy_team_name,
+                "teams": []
+            }
+
+            # Find all started teams for the current week
+            for started_team in started_teams:
+                if started_team.fantasy_team_id == fantasy_team.fantasy_team_id and started_team.week == week:
+                    fantasy_team_entry["teams"].append({
+                        "team_number": started_team.team_number
+                    })
+
+            # Append the fantasy team entry to the week
+            output[week]["fantasy_teams"].append(fantasy_team_entry)
+
+    session.close()
+    
+    # Transform output to a list of weeks
+    final_output = list(output.values())
+
+    if not final_output:
+        return jsonify([]), 404  # Return an empty list if no teams found
+
+    return jsonify(final_output), 200
+
 @app.route('/api/leagues/<int:leagueId>/fantasyScores/<int:week>', methods=['GET'])
 def get_fantasy_scores(leagueId, week):
     """
@@ -470,7 +651,7 @@ def get_fantasy_scores(leagueId, week):
 @app.route('/api/leagues/<int:leagueId>/waiverPriority', methods=['GET'])
 def get_waiver_priority(leagueId):
     """
-    Get Waiver Priority for a Specific League
+    Get Waiver Priority for a Specific League, including Fantasy Team names
     ---
     tags:
       - Waivers
@@ -492,26 +673,43 @@ def get_waiver_priority(leagueId):
               fantasy_team_id:
                 type: integer
                 description: The ID of the fantasy team
+              fantasy_team_name:
+                type: string
+                description: The name of the fantasy team
               priority:
                 type: integer
                 description: The waiver priority of the fantasy team
       404:
         description: League not found
     """
-    session = Session()
-    
-    # Query waiver priority for the specified leagueId
-    waiver_priority = session.query(WaiverPriority).filter(WaiverPriority.league_id == leagueId).order_by(WaiverPriority.priority.asc()).all()
-    session.close()
+    # Create a new session
+    with Session() as session:
+        # Query waiver priority along with the fantasy team name for the specified leagueId
+        waiver_priority = session.query(
+            WaiverPriority.fantasy_team_id,
+            WaiverPriority.priority,
+            FantasyTeam.fantasy_team_name  # Include the fantasy team name
+        ).join(
+            FantasyTeam, WaiverPriority.fantasy_team_id == FantasyTeam.fantasy_team_id
+        ).filter(
+            WaiverPriority.league_id == leagueId
+        ).order_by(
+            WaiverPriority.priority.asc()
+        ).all()
 
-    if not waiver_priority:
-        return jsonify({"error": "League not found or no waiver priorities"}), 404
+        # Close the session
+        session.close()
 
-    # Convert the WaiverPriority objects to a list of dictionaries for the JSON response
-    return jsonify([{
-        "fantasy_team_id": waiver.fantasy_team_id,
-        "priority": waiver.priority
-    } for waiver in waiver_priority])
+        # If no results found, return a 404 response
+        if not waiver_priority:
+            return jsonify({"error": "League not found or no waiver priorities"}), 404
+
+        # Convert the results to a list of dictionaries for the JSON response
+        return jsonify([{
+            "fantasy_team_id": waiver.fantasy_team_id,
+            "fantasy_team_name": waiver.fantasy_team_name,  # Include the fantasy team name in the response
+            "priority": waiver.priority
+        } for waiver in waiver_priority])
 
 @app.route('/api/leagues/<int:leagueId>/rankings', methods=['GET'])
 def get_league_rankings(leagueId):
@@ -614,6 +812,70 @@ def get_league_rankings(leagueId):
 
     return jsonify(result)
 
+@app.route('/api/leagues/<int:leagueId>/statesTeams', methods=['GET'])
+def get_states_round_team_ids(leagueId):
+    """
+    Retrieve the top 3 fantasy team IDs in the states round based on total ranking points,
+    evaluated only on weeks up to and including week 5.
+    ---
+    tags:
+      - Leagues
+      - FantasyScores
+    parameters:
+      - name: leagueId
+        in: path
+        type: integer
+        required: true
+        description: ID of the league to retrieve states round team IDs for.
+    responses:
+      200:
+        description: A list of the top 3 fantasy team IDs in the states round.
+        schema:
+          type: array
+          items:
+            type: integer
+            description: The ID of the fantasy team.
+    """
+    session = Session()
+
+    # Query the league to get the league year
+    league = session.query(League).filter(League.league_id == leagueId).first()
+    
+    if not league:
+        session.close()
+        return jsonify({"error": "League not found"}), 404
+
+    # Define the maximum week for scoring
+    max_week = 5
+
+    # Query for the fantasy teams in the specified league
+    fantasy_teams = session.query(FantasyTeam).filter(FantasyTeam.league_id == leagueId).all()
+
+    result = []
+
+    for team in fantasy_teams:
+        # Get all the scores for the fantasy team up to week 5
+        scores = session.query(FantasyScores).filter(
+            FantasyScores.fantasy_team_id == team.fantasy_team_id,
+            FantasyScores.week <= max_week
+        ).order_by(FantasyScores.week.asc()).all()
+
+        total_ranking_points = sum(score.rank_points for score in scores)
+        
+        result.append({
+            "fantasy_team_id": team.fantasy_team_id,
+            "total_ranking_points": total_ranking_points
+        })
+
+    # Sort by total ranking points
+    result.sort(key=lambda x: x["total_ranking_points"], reverse=True)
+
+    # Get the top 3 fantasy team IDs
+    top_team_ids = [team["fantasy_team_id"] for team in result[:3]]
+
+    session.close()
+
+    return jsonify(top_team_ids)
 
 @app.route('/api/leagues/<int:leagueId>/drafts', methods=['GET'])
 def get_league_drafts(leagueId):
@@ -697,6 +959,9 @@ def get_available_teams(draftId):
               team_number:
                 type: integer
                 description: The number of the available team.
+              name:
+                type: string
+                description: The name of the team.
               events:
                 type: array
                 items:
@@ -727,10 +992,11 @@ def get_available_teams(draftId):
         eventKey = draft.event_key
         year = draft.league.year
         previous_year = year - 1  # Calculate previous year
-        
+
         # Base query
         base_query = session.query(
             Team.team_number,
+            Team.name,  # Add team name to the query
             FRCEvent.event_key,
             FRCEvent.week,
             StatboticsData.year_end_epa
@@ -761,21 +1027,25 @@ def get_available_teams(draftId):
 
         # Prepare the available teams list with events and Statbotics data
         available_teams = {}
-        
+
         for row in result:
             team_number = row.team_number
+            team_name = row.name  # Add the team name
             event_key = row.event_key
             week = row.week
             year_end_epa = row.year_end_epa if row.year_end_epa is not None else 0  # Set default value if None
-            
+
             if team_number not in available_teams:
-                available_teams[team_number] = {"team_number": team_number, "events": [], "year_end_epa": year_end_epa}
-            
+                available_teams[team_number] = {
+                    "team_number": team_number,
+                    "name": team_name,  # Include team name in the response
+                    "events": [],
+                    "year_end_epa": year_end_epa
+                }
+
             available_teams[team_number]["events"].append({"event_key": event_key, "week": week})
-        
+
         return jsonify(list(available_teams.values()))
-
-
 
 @app.route('/api/drafts/<int:draftId>', methods=['GET'])
 def get_draft_info(draftId):
@@ -832,6 +1102,105 @@ def get_draft_info(draftId):
 
         return jsonify(draft_info)
 
+@app.route('/api/leagues/<int:leagueId>/availableTeams', methods=['GET'])
+def get_available_teams_fim(leagueId):
+    """
+    Retrieve a list of available teams not on a fantasy team or on waivers,
+    but are in FiM and registered for an event in the league's year.
+    ---
+    tags:
+      - Leagues
+      - Teams
+    parameters:
+      - name: leagueId
+        in: path
+        type: integer
+        required: true
+        description: The ID of the league for which to retrieve available teams.
+    responses:
+      200:
+        description: A list of available teams for the specified league.
+        schema:
+          type: array
+          items:
+            type: object
+            properties:
+              team_number:
+                type: integer
+                description: The number of the available team.
+              name:
+                type: string
+                description: The name of the team.
+              events:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    event_key:
+                      type: string
+                      description: The key of the event.
+                    week:
+                      type: integer
+                      description: The week of the event.
+      404:
+        description: League not found or no available teams.
+    """
+    # Create a new session
+    with Session() as session:
+        # Retrieve the league to ensure it exists
+        league = session.query(League).filter(League.league_id == leagueId).first()
+
+        if league is None:
+            abort(404, description="League not found")
+
+        year = league.year
+
+        # Query to retrieve available teams
+        available_teams_query = session.query(
+            Team.team_number,
+            Team.name,
+            FRCEvent.event_key,
+            FRCEvent.week,
+        ).join(
+            TeamScore, Team.team_number == TeamScore.team_key
+        ).join(
+            FRCEvent, TeamScore.event_key == FRCEvent.event_key
+        ).outerjoin(
+            TeamOwned, Team.team_number == TeamOwned.team_key
+        ).outerjoin(
+            TeamOnWaivers, Team.team_number == TeamOnWaivers.team_number
+        ).filter(
+            TeamOwned.team_key.is_(None),  # Teams not on a fantasy team
+            TeamOnWaivers.team_number.is_(None),  # Teams not on waivers
+            FRCEvent.year == year,  # Teams registered for an event in the current year
+            Team.is_fim.is_(True)  # Only FiM teams
+        ).order_by(
+            cast(Team.team_number, Integer).asc()  # Cast team_number to Integer for sorting
+        ).all()
+
+        # Prepare the available teams list
+        available_teams = {}
+
+        for row in available_teams_query:
+            team_number = row.team_number
+            team_name = row.name
+            event_key = row.event_key
+            week = row.week
+
+            if team_number not in available_teams:
+                available_teams[team_number] = {
+                    "team_number": team_number,
+                    "name": team_name,
+                    "events": []
+                }
+
+            available_teams[team_number]["events"].append({"event_key": event_key, "week": week})
+
+        # Return the list of available teams
+        if not available_teams:
+            return jsonify({"error": "No available teams found"}), 404
+
+        return jsonify(list(available_teams.values()))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)  # Bind to all IPs

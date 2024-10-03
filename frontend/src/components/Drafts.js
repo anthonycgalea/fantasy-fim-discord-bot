@@ -1,5 +1,6 @@
 // src/components/Drafts.js
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useParams } from 'react-router-dom';
 import api from '../api'; // Adjust the import path based on your project structure
 import './Drafts.css'; // Import the CSS file for styles
@@ -76,7 +77,7 @@ const Drafts = () => {
   
     return (
       <table className="table table-bordered">
-        <thead>
+        <thead className='table-secondary'>
           <tr>
             <th>Fantasy Team</th>
             <th>Week 1</th>
@@ -127,6 +128,7 @@ const Drafts = () => {
       });
       return { 
         teamNumber: team.team_number, 
+        teamName: team.name,
         events, 
         yearEndEpa: team.year_end_epa // Include year_end_epa here
       };
@@ -139,13 +141,18 @@ const Drafts = () => {
     const prevYear = league.year-1;
     return (
       <table className="table table-bordered">
-        <thead>
+        <thead className='table-secondary'>
           <tr>
-            <th>Team Number</th>
+            <th rowspan="2" class="align-middle">Team #</th>
+            <th rowspan="2" class="align-middle">Team Name</th>
+            <th colspan="5">Week</th>
+            <th rowspan="2" class="align-middle">{prevYear} EPA</th>
+          </tr>
+          <tr>
             {weeks.map((week) => (
               <th key={week}>
                 <div className="form-check form-switch d-flex justify-content-between align-items-center">
-                  <label className="form-check-label">{`Week ${week}`}</label>
+                  <label className="form-check-label">{`${week}`}</label>
                   <input
                     type="checkbox"
                     className="form-check-input"
@@ -155,13 +162,13 @@ const Drafts = () => {
                 </div>
               </th>
             ))}
-            <th>{prevYear} EPA</th> {/* New column for year_end_epa */}
           </tr>
         </thead>
         <tbody>
-          {filteredTeams.map(({ teamNumber, events, yearEndEpa }) => (
+          {filteredTeams.map(({ teamNumber, teamName, events, yearEndEpa }) => (
             <tr key={teamNumber}>
               <td>{teamNumber}</td>
+              <td>{teamName}</td>
               {events.map((event, index) => (
                 <td key={index}>{event}</td>
               ))}
@@ -173,11 +180,6 @@ const Drafts = () => {
     );
   };
   
-
-
-  
-  
-
   const renderDraftBoard = () => {
     const picksByRound = {};
 
@@ -193,7 +195,7 @@ const Drafts = () => {
     const colWid = 50/draftOrder.length + "%";
     return (
       <table className="table table-bordered">
-        <thead>
+        <thead className='table-secondary'>
           <tr>
             <th className="text-wrap draft-round">Round</th> {/* Round column */}
             {draftOrder.map((order) => {
@@ -230,7 +232,7 @@ const Drafts = () => {
     <div className="container mt-5">
       <div className="row">
       {draft ? ( // Check if draft is loaded
-        <h2 className="text-center">{draft.event_key === "fim" ? "Michigan" : draft.event_key} Draft for League {league ? league.league_name : 'Loading...'}</h2>
+        <h2 className="text-center">{draft.event_key === "fim" ? "Michigan" : draft.event_key} Draft for <Link to={`/leagues/${league.league_id}`}>{league ? league.league_name : 'Loading...'}</Link></h2>
       ) : (
         <h2 className="text-center">Loading Draft...</h2> // Loading message if draft is not yet available
       )}

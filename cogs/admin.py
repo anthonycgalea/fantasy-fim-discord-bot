@@ -772,7 +772,6 @@ class Admin(commands.Cog):
         session.close()
       await self.notifyWeeklyScoresTask(interaction, year, week)
       await self.getLeagueStandingsTask(interaction, year, week)
-      
 
   @app_commands.command(name="authorize", description="Add an authorized user to a fantasy team (ADMIN)")
   @app_commands.checks.has_role("Fantasy FiM Admin") 

@@ -61,8 +61,6 @@ class Scores(commands.Cog):
       # Send the embed (example)
       await message.edit(embed=embed)
 
-
-
   @app_commands.command(name="scores", description="Retrieve Scores")
   async def getScores(self, interaction: discord.Interaction):
     await interaction.response.send_message("retrieving scores")

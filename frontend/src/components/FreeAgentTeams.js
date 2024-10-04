@@ -104,7 +104,7 @@ const FreeAgentTeams = ({leagueId}) => {
     <div className="container mt-5">
         <div className="row">
             {league ? ( // Check if league is loaded
-                <h2 className="text-center">Free Agents for {league ? league.league_name : 'Loading...'}</h2>
+                ""
             ) : (
                 <h2 className="text-center">Loading Free Agents...</h2> // Loading message if league is not yet available
             )}

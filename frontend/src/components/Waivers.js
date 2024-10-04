@@ -131,7 +131,7 @@ const Waivers = ({leagueId}) => {
     <div className="container mt-5">
       <div className="row">
       {league ? ( // Check if league is loaded
-        <h2 className="text-center">Waivers for {league ? league.league_name : 'Loading...'}</h2>
+        ""
       ) : (
         <h2 className="text-center">Loading Waivers...</h2> // Loading message if draft is not yet available
       )}

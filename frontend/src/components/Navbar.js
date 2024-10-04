@@ -19,7 +19,7 @@ const Navbar = () => {
             <li className="nav-item">
                 <a 
                     className="nav-link" 
-                    href="http://localhost:5000/apidocs" 
+                    href="http://fantasyfim.com/apidocs" 
                     target="_blank" 
                     rel="noopener noreferrer"
                 >
@@ -27,7 +27,7 @@ const Navbar = () => {
                 </a>
             </li>
             <li className="nav-item">
-              <Link className="nav-link" to="https://github.com/anthonycgalea/fantasy-fim-discord-bot">GitHub</Link>
+              <Link className="nav-link" to="https://github.com/anthonycgalea/fantasy-fim">GitHub</Link>
             </li>
           </ul>
         </div>

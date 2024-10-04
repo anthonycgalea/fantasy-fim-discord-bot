@@ -1,4 +1,4 @@
-# **Fantasy FIRST in Michigan**
+# **[Fantasy FIRST in Michigan](http://www.fantasyfim.com/)**
 
 Welcome to **Fantasy FIRST in Michigan**! This application allows users to draft and manage fantasy teams based on real-world robotics competitions, providing real-time scoring, user rankings, and league management features.
 

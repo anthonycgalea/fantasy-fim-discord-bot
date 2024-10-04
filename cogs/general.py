@@ -78,7 +78,7 @@ class General(commands.Cog):
 
   @app_commands.command(name="api", description="sends a link to the swagger page for the API")
   async def getAPI(self, interaction: discord.Interaction):
-    await interaction.response.send_message(f"{websiteURL}/apidocs")
+    await interaction.response.send_message(f"{websiteURL}/api/apidocs")
 
   @app_commands.command(name="weekstatus", description="Reports on the status of the current fantasy FiM week")
   async def getWeekStatus(self, interaction: discord.Interaction):

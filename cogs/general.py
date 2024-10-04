@@ -44,7 +44,10 @@ class General(commands.Cog):
     fantasyTeams = session.query(FantasyTeam).where(FantasyTeam.league_id==leagueid).order_by(FantasyTeam.fantasy_team_id.asc()).all()
     for team in fantasyTeams:
       waiverprio = team.waiver_priority.priority
-      draftOrderEmbed.description+=f"{team.fantasy_team_id:>7d}{'':5s}{team.fantasy_team_name:30s}{waiverprio:^6d}\n"  
+      if waiverprio==None:
+        draftOrderEmbed.description+=f"{team.fantasy_team_id:>7d}{'':5s}{team.fantasy_team_name:30s}{waiverprio:^6d}\n"  
+      else:
+        draftOrderEmbed.description+=f"{team.fantasy_team_id:>7d}{'':5s}{team.fantasy_team_name:30s}{waiverprio:^6d}\n"  
     draftOrderEmbed.description+="```"
     await interaction.response.send_message(embed=draftOrderEmbed)
     session.close()
@@ -60,6 +63,10 @@ class General(commands.Cog):
     fantasyTeams = session.query(WaiverPriority).where(WaiverPriority.league_id==leagueid).order_by(WaiverPriority.priority.asc()).all()
     for team in fantasyTeams:
       waiverprio = team.priority
+      if waiverprio == None:
+        await interaction.response.send_message("No waiver priorities yet!")
+        session.close()
+        return
       fantasyTeam = team.fantasy_team
       draftOrderEmbed.description+=f"{fantasyTeam.fantasy_team_id:>7d}{'':5s}{fantasyTeam.fantasy_team_name:30s}{waiverprio:^6d}\n"    
     draftOrderEmbed.description+="```"

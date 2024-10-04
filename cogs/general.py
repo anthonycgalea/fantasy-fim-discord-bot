@@ -19,7 +19,7 @@ class General(commands.Cog):
     latency = round(self.bot.latency * 1000, 2)
     await interaction.response.send_message(f"Pong! Latency: {latency}ms")
 
-  @app_commands.command(name="getleagues", description="Reports on active leagues and their league ids.")
+  @app_commands.command(name="leagues", description="Reports on active leagues and their league ids.")
   async def getLeagues(self, interaction: discord.Interaction):
     session = await self.bot.get_session()
     leagues = session.query(League).where(League.active == True)
@@ -75,6 +75,10 @@ class General(commands.Cog):
     leagueid = league.first().league_id
     await interaction.response.send_message(f"{websiteURL}/leagues/{leagueid}")
     session.close()
+
+  @app_commands.command(name="website", description="Retrieve a link to the fantasy FiM website")
+  async def getLeagueWebpage(self, interaction: discord.Interaction):    
+    await interaction.response.send_message(f"{websiteURL}")
 
   @app_commands.command(name="api", description="sends a link to the swagger page for the API")
   async def getAPI(self, interaction: discord.Interaction):

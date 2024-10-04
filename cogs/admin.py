@@ -640,13 +640,11 @@ class Admin(commands.Cog):
             return None
 
   @app_commands.command(name="updateteamlist", description="Grabs all teams from TBA (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def updateTeamList(self, interaction: discord.Interaction, startpage: int = 0):    
     if (await self.verifyAdmin(interaction)):
       asyncio.create_task(self.updateTeamsTask(interaction, startpage))
       
   @app_commands.command(name="addleague", description="Create a new league (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def createLeague(self, interaction: discord.Interaction, league_name: str, team_limit: int, year: int, is_fim: bool = False, team_starts: int = 3, offseason: bool = False, team_size_limit: int = 3):
     if (await self.verifyAdmin(interaction)):
       forum = await self.getForum()
@@ -662,7 +660,6 @@ class Admin(commands.Cog):
       session.close()
 
   @app_commands.command(name="registerteam", description="Register Fantasy Team (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def registerTeam(self, interaction:discord.Interaction, teamname: str):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
@@ -683,7 +680,6 @@ class Admin(commands.Cog):
       await interaction.response.send_message(f"Team {teamname} created successfully in league with id {leagueid}. Team id is {fantasyTeamToAdd.fantasy_team_id}")
 
   @app_commands.command(name="fillleague", description="Populates a League to the max amount of teams with generic teams (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def populateLeague(self, interaction:discord.Interaction):
       if (await self.verifyAdmin(interaction)):
         session = await self.bot.get_session()
@@ -705,7 +701,6 @@ class Admin(commands.Cog):
         session.close()
 
   @app_commands.command(name="createdraft", description="Creates a fantasy draft for a given League and populates it with picks (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def createDraft(self, interaction:discord.Interaction, event_key: str):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
@@ -747,7 +742,6 @@ class Admin(commands.Cog):
       session.close()      
 
   @app_commands.command(name="startdraft", description="Starts the draft in the current channel (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def startDraft(self, interaction:discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
@@ -777,8 +771,7 @@ class Admin(commands.Cog):
       draftCog = drafting.Drafting(self.bot)
       await draftCog.postDraftBoard(interaction=interaction)
 
-  @app_commands.command(name="resetdraft", description="Resets an already started draft. (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
+  @app_commands.command(name="resetdraft", description="Resets an already started draft. (ADMIN)") 
   async def resetDraft(self, interaction:discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
@@ -792,19 +785,16 @@ class Admin(commands.Cog):
     await interaction.response.send_message(f"Successfully reset draft! Use command /startdraft to restart the draft.")
 
   @app_commands.command(name="updateevents", description="Update events for a given year (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def updateEvents(self, interaction: discord.Interaction, year: int):
     if (await self.verifyAdmin(interaction)):
       asyncio.create_task(self.updateEventsTask(interaction, year))
     
   @app_commands.command(name="importoffseasonevent", description="Imports offseason event and team list from TBA (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def importOffseasonEvent(self, interaction: discord.Interaction, eventkey: str):
     if (await self.verifyAdmin(interaction)):
       asyncio.create_task(self.importSingleEventTask(interaction, eventkey))
 
   @app_commands.command(name="importdistrict", description="Pull all registration data for district events and load db (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def importDistrict(self, interaction: discord.Interaction, year: str, district: str = "fim"):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Force updating district {district}")
@@ -826,7 +816,6 @@ class Admin(commands.Cog):
       await self.getLeagueStandingsTask(interaction, year, week)
 
   @app_commands.command(name="authorize", description="Add an authorized user to a fantasy team (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def authorizeUser(self, interaction:discord.Interaction, fantasyteamid: int, user: discord.User):
     if (await self.verifyAdmin(interaction)):
       session = await self.bot.get_session()
@@ -846,15 +835,13 @@ class Admin(commands.Cog):
         await interaction.response.send_message("You can't add someone already on it to their own team dummy!", ephemeral=True)
     
   @app_commands.command(name="forcepick", description="Admin ability to force a draft pick (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def forceDraftPick(self, interaction:discord.Interaction, team_number: str):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to force pick team {team_number}.")
       draftCog = drafting.Drafting(self.bot)
       await draftCog.makeDraftPickHandler(interaction=interaction, team_number=team_number, force=True)
 
-  @app_commands.command(name="autopick", description="Admin ability to force an auto draft pick (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin")     
+  @app_commands.command(name="autopick", description="Admin ability to force an auto draft pick (ADMIN)")   
   async def forceAutoPick(self, interaction:discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to force pick best available team.")
@@ -868,14 +855,12 @@ class Admin(commands.Cog):
       teamToPick = suggestedTeams[0][0]
       await draftCog.makeDraftPickHandler(interaction=interaction, team_number=teamToPick, force=True)
 
-  @app_commands.command(name="statboticsupdate", description="Updates cache of Statbotics data (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin")     
+  @app_commands.command(name="statboticsupdate", description="Updates cache of Statbotics data (ADMIN)")   
   async def updateStatbotics(self, interaction:discord.Interaction, year: int):
     if (await self.verifyAdmin(interaction)):
       asyncio.create_task(self.updateStatboticsTask(interaction, year))
 
   @app_commands.command(name="deauthplayer", description="Remove a player from a team (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def deauthPlayer(self, interaction:discord.Interaction, user: discord.User):
     if (await self.verifyAdmin(interaction)):
       if not await self.bot.verifyNotInLeague(interaction, user):
@@ -890,7 +875,6 @@ class Admin(commands.Cog):
         await interaction.response.send_message("Player is not on a team.")
 
   @app_commands.command(name="forcestart", description="Admin ability to force a team into a starting lineup (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def forceStart(self, interaction:discord.Interaction, fantasyteamid: int, week: int, team_number: str):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to force start team {team_number}.")
@@ -898,7 +882,6 @@ class Admin(commands.Cog):
       await manageTeamCog.startTeamTask(interaction, team_number, week, fantasyteamid)
 
   @app_commands.command(name="forcesit", description="Admin ability to force a team out of a starting lineup (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def forceSit(self, interaction:discord.Interaction, fantasyteamid: int, week: int, team_number: str):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to force sit team {team_number}.")
@@ -906,7 +889,6 @@ class Admin(commands.Cog):
       await manageTeamCog.sitTeamTask(interaction, team_number, week, fantasyteamid)
 
   @app_commands.command(name="viewteamlineup", description="Admin ability to view a team's starting lineup (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def viewStartingLineup(self, interaction:discord.Interaction, fantasyteamid: int):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to view starting lineup of team {fantasyteamid}.")
@@ -914,7 +896,6 @@ class Admin(commands.Cog):
       await manageTeamCog.viewStartsTask(interaction, fantasyteamid)
 
   @app_commands.command(name="adminrenameteam", description="Admin ability to rename a team (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def renameFantasyTeam(self, interaction:discord.Interaction, fantasyteamid: int, newname: str):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to rename team {fantasyteamid} to {newname}.")
@@ -922,7 +903,6 @@ class Admin(commands.Cog):
       await manageTeamCog.renameTeamTask(interaction, fantasyId=fantasyteamid, newname=newname)
 
   @app_commands.command(name="locklineups", description="Admin ability to lock lineups for the week (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def lockLineups(self, interaction:discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       currentWeek = await self.bot.getCurrentWeek()
@@ -940,7 +920,6 @@ class Admin(commands.Cog):
       await interaction.response.send_message(f"Locked lineups for week {currentWeek.week} in {currentWeek.year}")
 
   @app_commands.command(name="finishweek", description="Admin ability to deactivate the currently active week (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def finishWeek(self, interaction:discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       currentWeek = await self.bot.getCurrentWeek()
@@ -959,7 +938,6 @@ class Admin(commands.Cog):
       await message.edit(content=f"Deactivated week {currentWeek.week} in {currentWeek.year}")
   
   @app_commands.command(name="remind", description="Remind players to set their lineups (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def remindPlayers(self, interaction:discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message("Reminding all users with unfilled lineups to fill them.")
@@ -988,7 +966,6 @@ class Admin(commands.Cog):
       session.close()
 
   @app_commands.command(name="processwaivers", description="Process all waivers (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def processWaivers(self, interaction: discord.Interaction):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to process waivers")
@@ -1077,7 +1054,6 @@ class Admin(commands.Cog):
       session.close()
 
   @app_commands.command(name="forceadddrop", description="Force an add/drop (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin") 
   async def forceAddDrop(self, interaction: discord.Interaction, fantasyteamid: int, addteam: str, dropteam: str, towaivers: bool = True):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to admin drop {dropteam} to add {addteam} from team id {fantasyteamid}", ephemeral=True)
@@ -1085,7 +1061,6 @@ class Admin(commands.Cog):
       await manageTeamCog.addDropTeamTask(interaction, addTeam=addteam,dropTeam=dropteam, fantasyId=fantasyteamid, force=True, toWaivers=towaivers)
 
   @app_commands.command(name="forcetrade", description="Force a trade through (ADMIN)")
-  @app_commands.checks.has_role("Fantasy FiM Admin")
   async def forceTrade(self, interaction: discord.Interaction, teamid1: int, teamid2: int, team1trading: str, team2trading: str):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Attempting to admin force trade {team1trading} force {team2trading} for team ids {teamid1} and {teamid2}", ephemeral=True)

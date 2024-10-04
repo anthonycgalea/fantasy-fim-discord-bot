@@ -14,7 +14,36 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-swagger = Swagger(app)
+
+app.config['SWAGGER'] = {
+    'title': 'Fantasy FiM API',
+    'uiversion': 3,
+    'specs': [
+        {
+            'endpoint': 'apispec_1',
+            'route': '/apidocs/swagger.json',
+            'rule_filter': lambda rule: True,  # All rules are included
+            'model_filter': lambda tag: True  # All models are included
+        }
+    ],
+    'headers': [],
+    'static_url_path': '/apidocs',
+}
+
+swagger = Swagger(app, 
+    template={
+        "swagger": "2.0",
+        "info": {
+            "title": "Fantasy FiM API",
+            "description": "API documentation",
+            "version": "1.0.0",
+        },
+        "host": "fantasyfim.com",  # Update with your host
+        "basePath": "/api",        # This should match your API prefix
+    },
+    config={
+        "specs_route": "/api/apidocs/",  # This sets the URL for your API docs
+    })
 CORS(app)
 
 # Configure the database

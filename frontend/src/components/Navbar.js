@@ -19,7 +19,7 @@ const Navbar = () => {
             <li className="nav-item">
                 <a 
                     className="nav-link" 
-                    href="http://fantasyfim.com/apidocs" 
+                    href="http://fantasyfim.com/api/apidocs" 
                     target="_blank" 
                     rel="noopener noreferrer"
                 >

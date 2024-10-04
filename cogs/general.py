@@ -61,12 +61,12 @@ class General(commands.Cog):
     leagueid = league.first().league_id
     draftOrderEmbed = Embed(title=f"**Teams in {league.first().league_name}**", description=f"```{'Team ID':7s}{'':5s}{'Team Name (id)':30s}{'Waiver':^6s}\n")
     fantasyTeams = session.query(WaiverPriority).where(WaiverPriority.league_id==leagueid).order_by(WaiverPriority.priority.asc()).all()
+    if not fantasyTeams:
+      await interaction.response.send_message("No waiver priorities yet!")
+      session.close()
+      return
     for team in fantasyTeams:
       waiverprio = team.priority
-      if waiverprio == None:
-        await interaction.response.send_message("No waiver priorities yet!")
-        session.close()
-        return
       fantasyTeam = team.fantasy_team
       draftOrderEmbed.description+=f"{fantasyTeam.fantasy_team_id:>7d}{'':5s}{fantasyTeam.fantasy_team_name:30s}{waiverprio:^6d}\n"    
     draftOrderEmbed.description+="```"

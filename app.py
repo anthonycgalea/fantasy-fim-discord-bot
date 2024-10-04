@@ -24,7 +24,7 @@ Base.metadata.create_all(engine)
 
 Session = sessionmaker(bind=engine)
 
-@app.route('/leagues', methods=['GET'])
+@app.route('/api/leagues', methods=['GET'])
 def get_leagues():
     """
     Retrieve a list of active FIM leagues.
@@ -81,7 +81,7 @@ def get_leagues():
         "team_size_limit": league.team_size_limit
     } for league in leagues])
 
-@app.route('/leagues/<int:leagueId>', methods=['GET'])
+@app.route('/api/leagues/<int:leagueId>', methods=['GET'])
 def get_league(leagueId):
     """
     Retrieve a FIM league's data.
@@ -124,7 +124,7 @@ def get_league(leagueId):
     session.close()
     return jsonify({"league_id": league.league_id, "league_name": league.league_name, "weekly_starts": league.team_starts, "year": league.year, "is_fim": league.is_fim} )
 
-@app.route('/leagues/<int:leagueId>/fantasyTeams', methods=['GET'])
+@app.route('/api/leagues/<int:leagueId>/fantasyTeams', methods=['GET'])
 def get_fantasy_teams(leagueId):
     """
     Retrieve a list of fantasy teams for a specific league.
@@ -160,7 +160,7 @@ def get_fantasy_teams(leagueId):
     session.close()
     return jsonify([{"fantasy_team_id": team.fantasy_team_id, "team_name": team.fantasy_team_name} for team in teams])
 
-@app.route('/leagues/<int:leagueId>/teamsOnWaivers', methods=['GET'])
+@app.route('/api/leagues/<int:leagueId>/teamsOnWaivers', methods=['GET'])
 def get_waiver_teams(leagueId):
     """
     Retrieve a list of teams on waivers for a specific league, including their registered events and Statbotics data.
@@ -250,7 +250,7 @@ def get_waiver_teams(leagueId):
         # Return the list of teams on waivers
         return jsonify(list(waiver_teams.values()))
 
-@app.route('/leagues/<int:leagueId>/rosters', methods=["GET"])
+@app.route('/api/leagues/<int:leagueId>/rosters', methods=["GET"])
 def get_rosters(leagueId):
     """
     Retrieve the rosters for all fantasy teams in a specific league.
@@ -297,7 +297,7 @@ def get_rosters(leagueId):
     session.close()
     return jsonify(output)
 
-@app.route('/drafts/<int:draftId>/picks', methods=["GET"])
+@app.route('/api/drafts/<int:draftId>/picks', methods=["GET"])
 def get_draft_picks(draftId):
     """
     Retrieve a list of draft picks for a specific draft, including the events teams compete in with their weeks.
@@ -375,7 +375,7 @@ def get_draft_picks(draftId):
 
     return jsonify(picks_data)
 
-@app.route('/drafts/<int:draftId>/draftOrder', methods=['GET'])
+@app.route('/api/drafts/<int:draftId>/draftOrder', methods=['GET'])
 def get_draft_order(draftId):
     """
     Get Draft Order for a Specific Draft
@@ -420,7 +420,7 @@ def get_draft_order(draftId):
         "draft_slot": draft.draft_slot
     } for draft in draft_order])
 
-@app.route('/leagues/<int:leagueId>/lineups', methods=['GET'])
+@app.route('/api/leagues/<int:leagueId>/lineups', methods=['GET'])
 def get_lineups(leagueId):
     """
     Retrieve the lineups for all fantasy teams in a specified league for all weeks.
@@ -518,7 +518,7 @@ def get_lineups(leagueId):
 
     return jsonify(final_output), 200
 
-@app.route('/leagues/<int:leagueId>/fantasyScores/<int:week>', methods=['GET'])
+@app.route('/api/leagues/<int:leagueId>/fantasyScores/<int:week>', methods=['GET'])
 def get_fantasy_scores(leagueId, week):
     """
     Retrieve the fantasy scores for all fantasy teams in a specified league for a specific week.
@@ -651,7 +651,7 @@ def get_fantasy_scores(leagueId, week):
     session.close()
     return jsonify(output)
 
-@app.route('/leagues/<int:leagueId>/waiverPriority', methods=['GET'])
+@app.route('/api/leagues/<int:leagueId>/waiverPriority', methods=['GET'])
 def get_waiver_priority(leagueId):
     """
     Get Waiver Priority for a Specific League, including Fantasy Team names
@@ -714,7 +714,7 @@ def get_waiver_priority(leagueId):
             "priority": waiver.priority
         } for waiver in waiver_priority])
 
-@app.route('/leagues/<int:leagueId>/rankings', methods=['GET'])
+@app.route('/api/leagues/<int:leagueId>/rankings', methods=['GET'])
 def get_league_rankings(leagueId):
     """
     Retrieve cumulative rankings per week for every team in a league, sorted by cumulative ranking points,
@@ -815,7 +815,7 @@ def get_league_rankings(leagueId):
 
     return jsonify(result)
 
-@app.route('/leagues/<int:leagueId>/statesTeams', methods=['GET'])
+@app.route('/api/leagues/<int:leagueId>/statesTeams', methods=['GET'])
 def get_states_round_team_ids(leagueId):
     """
     Retrieve the top 3 fantasy team IDs in the states round based on total ranking points,
@@ -880,7 +880,7 @@ def get_states_round_team_ids(leagueId):
 
     return jsonify(top_team_ids)
 
-@app.route('/leagues/<int:leagueId>/drafts', methods=['GET'])
+@app.route('/api/leagues/<int:leagueId>/drafts', methods=['GET'])
 def get_league_drafts(leagueId):
     """
     Retrieve all drafts in a league with their draft ID, round, and event key.
@@ -937,7 +937,7 @@ def get_league_drafts(leagueId):
 
     return jsonify(result)
 
-@app.route('/drafts/<int:draftId>/availableTeams', methods=['GET'])
+@app.route('/api/drafts/<int:draftId>/availableTeams', methods=['GET'])
 def get_available_teams(draftId):
     """
     Retrieve all available teams for a specific draft, including their registered events and Statbotics data.
@@ -1050,7 +1050,7 @@ def get_available_teams(draftId):
 
         return jsonify(list(available_teams.values()))
 
-@app.route('/drafts/<int:draftId>', methods=['GET'])
+@app.route('/api/drafts/<int:draftId>', methods=['GET'])
 def get_draft_info(draftId):
     """
     Retrieve generic information for a specific draft.
@@ -1105,7 +1105,7 @@ def get_draft_info(draftId):
 
         return jsonify(draft_info)
 
-@app.route('/leagues/<int:leagueId>/availableTeams', methods=['GET'])
+@app.route('/api/leagues/<int:leagueId>/availableTeams', methods=['GET'])
 def get_available_teams_fim(leagueId):
     """
     Retrieve a list of available teams not on a fantasy team or on waivers,

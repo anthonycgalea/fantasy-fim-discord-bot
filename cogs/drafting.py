@@ -91,34 +91,29 @@ class Drafting(commands.Cog):
     return not team_number in teamsPicked
   
   async def teamIsInDraft(self, team_number: str, eventKey: str, year: int, isFiM: bool):
-    teamsEligible = set()
-    if (isFiM):
-      stmt = text(f"""select distinct
-                      teams.team_number
-                      from
-                      teams
-                      join 
-                      teamscore
-                      on 
-                      teams.team_number=teamscore.team_key
-                      join 
-                      frcevent
-                      on
-                      teamscore.event_key=frcevent.event_key
-                      where 
-                      teams.is_fim={isFiM}
-                      and frcevent.year={year}""")
+    session = await self.bot.get_session()
+
+    # Query to get eligible teams based on whether it's FiM or not
+    if isFiM:
+        query = session.query(Team.team_number).distinct() \
+            .join(TeamScore, Team.team_number == TeamScore.team_key) \
+            .join(FRCEvent, TeamScore.event_key == FRCEvent.event_key) \
+            .filter(
+                Team.is_fim == isFiM,
+                FRCEvent.year == year
+            )
     else:
-      stmt = f"""
-              select distinct
-              team_key
-              from
-              teamscore
-              where 
-              event_key={eventKey}
-              """
-    result = self.bot.session.execute(stmt).all()
-    teamsEligible.update([team[0] for team in result])
+        query = session.query(TeamScore.team_key).distinct() \
+            .filter(TeamScore.event_key == eventKey)
+
+    # Execute the query and get the result
+    result = query.all()
+
+    # Close the session
+    session.close()
+
+    # Update the set of eligible teams and check if the given team is in the list
+    teamsEligible = {team[0] for team in result}
     return team_number in teamsEligible
   
   async def getSuggestedTeamsList(self, eventKey: str, year: int, isFiM: bool, draft_id: int, isOffseason: bool=False):

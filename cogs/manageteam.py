@@ -20,14 +20,13 @@ class ManageTeam(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
     
-    def getWaiverClaimPriority(self, fantasyId):
-        stmt = text(f"select max(priority) from waiverclaim\
-                     where fantasy_team_id={fantasyId}")
-        result = self.bot.session.execute(stmt).first()[0]
-        if not result == None:
-            return int(result) + 1
-        else:
+    async def getWaiverClaimPriority(self, fantasyId):
+        session = await self.bot.get_session()
+        waiverprio = session.query(WaiverClaim).filter(WaiverClaim.fantasy_team==fantasyId).order_by(WaiverClaim.priority.desc()).first()
+        if not waiverprio:
             return 1
+        else:
+            return waiverprio.priority + 1            
 
     async def postTeamBoard(self, interaction: discord.Interaction, fantasyTeam: int):
         session = await self.bot.get_session()
@@ -309,10 +308,10 @@ class ManageTeam(commands.Cog):
             await originalMessage.edit(content=f"You have already made this claim!")
         #create waiver claim
         else:
-            
+            newPriority = await self.getWaiverClaimPriority(fantasyId)
             waiverClaim = WaiverClaim(fantasy_team_id=fantasyId,\
                                       league_id=fantasyTeam.league_id, team_claimed=addTeam,\
-                                        team_to_drop=dropTeam, priority=self.getWaiverClaimPriority(fantasyId))
+                                        team_to_drop=dropTeam, priority=newPriority)
             session.add(waiverClaim)
             await originalMessage.edit(content=f"Successfully created claim for {addTeam}!")
             session.commit()

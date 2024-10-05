@@ -590,9 +590,9 @@ class Admin(commands.Cog):
     await interaction.followup.send(f"League standings for {year} up to week {week} have been sent to all active leagues.")
 
   async def verifyAdmin(self, interaction: discord.Interaction):
-    stmt = select(Player).where(Player.user_id == str(interaction.user.id))
-    users = self.bot.session.execute(stmt)
-    if (users.rowcount == 0 or not users.first().is_admin):
+    session = await self.bot.get_session()
+    isAdmin = session.query(Player).filter(Player.user_id==str(interaction.user.id), Player.is_admin==True).first()
+    if not isAdmin:
       await interaction.response.send_message("You are not authorized to use this command.")
       return False
     else:
@@ -601,27 +601,27 @@ class Admin(commands.Cog):
   async def getForum(self):
     return self.bot.get_channel(int(FORUM_CHANNEL_ID))
 
-  def getLeagueId(self): #league id generation for primary key
-    stmt = text("select max(league_id) from league")
-    result = self.bot.session.execute(stmt).first()[0]
-    if not result == None:
-      return int(result) + 1
+  async def getLeagueId(self): #league id generation for primary key
+    session = await self.bot.get_session()
+    maxleague = session.query(League).order_by(League.league_id.desc()).first()
+    if not maxleague == None:
+      return maxleague.league_id + 1
     else:
       return 1
     
-  def getFantasyTeamId(self): #fantasy team id generation for primary key
-    stmt = text("select max(fantasy_team_id) from fantasyteam")
-    result = self.bot.session.execute(stmt).first()[0]
-    if not result == None:
-      return int(result) + 1
+  async def getFantasyTeamId(self): #fantasy team id generation for primary key
+    session = await self.bot.get_session()
+    maxFantasyTeam = session.query(FantasyTeam).order_by(FantasyTeam.fantasy_team_id.desc()).first()
+    if not maxFantasyTeam == None:
+      return maxFantasyTeam.fantasy_team_id + 1
     else:
       return 1
     
-  def getDraftId(self): #draft id generation for primary key
-    stmt = text("select max(draft_id) from draft")
-    result = self.bot.session.execute(stmt).first()[0]
-    if not result == None:
-      return int(result) + 1
+  async def getDraftId(self): #draft id generation for primary key
+    session = await self.bot.get_session()
+    maxDraft = session.query(Draft).order_by(Draft.draft_id.desc()).first()
+    if not maxDraft == None:
+      return maxDraft.draft_id + 1
     else:
       return 1
 
@@ -650,8 +650,9 @@ class Admin(commands.Cog):
       forum = await self.getForum()
       nameOfDraft = f"{league_name} League Thread"
       thread = (await forum.create_thread(content="test",name=nameOfDraft))[0]
-      threadId = thread.id      
-      leagueToAdd = League(league_id=self.getLeagueId(), league_name=league_name, team_limit=team_limit,\
+      threadId = thread.id   
+      newLeagueId = await self.getLeagueId()
+      leagueToAdd = League(league_id=newLeagueId, league_name=league_name, team_limit=team_limit,\
                            team_starts=team_starts, offseason=offseason, is_fim=is_fim, year=year, discord_channel=threadId, team_size_limit=team_size_limit)
       session = await self.bot.get_session()
       session.add(leagueToAdd)
@@ -672,7 +673,8 @@ class Admin(commands.Cog):
       elif (leagues.first().team_limit <= teamsInLeague.count()):
         await interaction.response.send_message(f"League with id {leagueid} is at max capacity.") 
         return
-      fantasyTeamToAdd = FantasyTeam(fantasy_team_id=self.getFantasyTeamId(), fantasy_team_name=teamname, league_id=leagueid)
+      newTeamId = await self.getFantasyTeamId()
+      fantasyTeamToAdd = FantasyTeam(fantasy_team_id=newTeamId, fantasy_team_name=teamname, league_id=leagueid)
       session = await self.bot.get_session()
       session.add(fantasyTeamToAdd)
       session.commit()
@@ -693,7 +695,8 @@ class Admin(commands.Cog):
           await interaction.response.send_message(f"League is at max capacity.") 
           return
         while(teamLimit > teamsInLeague.count()):
-          fantasyTeamToAdd = FantasyTeam(fantasy_team_id=self.getFantasyTeamId(), fantasy_team_name=f"Team {self.getFantasyTeamId()}", league_id=leagueid)
+          newTeamId = await self.getFantasyTeamId()
+          fantasyTeamToAdd = FantasyTeam(fantasy_team_id=newTeamId, fantasy_team_name=f"Team {newTeamId}", league_id=leagueid)
           session.add(fantasyTeamToAdd)
           session.commit()
           teamsInLeague = session.query(FantasyTeam).filter(FantasyTeam.league_id==leagueid)
@@ -721,7 +724,8 @@ class Admin(commands.Cog):
       nameOfDraft = f"{leagues.first().league_name} draft for {event_key}"
       thread = (await forum.create_thread(content="test",name=nameOfDraft))[0]
       threadId = thread.id
-      draftToCreate = Draft(draft_id=self.getDraftId(), league_id=leagueid, rounds=rounds, event_key=event_key, discord_channel=threadId)
+      newDraftId = await self.getDraftId()
+      draftToCreate = Draft(draft_id=newDraftId, league_id=leagueid, rounds=rounds, event_key=event_key, discord_channel=threadId)
       session.add(draftToCreate)
       session.commit()
       await interaction.response.send_message(f"Draft generated! <#{threadId}>")

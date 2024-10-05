@@ -30,7 +30,7 @@ class FantasyFiMBot(commands.Bot):
                          intents=discord.Intents.all(),
                          applpication_id=os.getenv("DISCORD_APPLICATION_ID"))
 
-        self.engine = create_engine(url=conn_str, pool_size=20, max_overflow=40, pool_pre_ping=True, pool_recycle=300)
+        self.engine = create_engine(url=conn_str, pool_size=20, max_overflow=40, pool_pre_ping=True, pool_recycle=60)
         self.session = self.engine.connect()
         Base.metadata.create_all(self.engine)
 

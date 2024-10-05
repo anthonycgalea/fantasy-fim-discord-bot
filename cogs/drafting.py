@@ -1,9 +1,10 @@
 import discord, sqlalchemy
 from discord import app_commands, Embed
 from discord.ext import commands
-from models.draft import Draft, DraftPick, DraftOrder
-from models.scores import League, PlayerAuthorized, FantasyTeam, TeamOwned
+from models.draft import Draft, DraftPick, DraftOrder, StatboticsData
+from models.scores import League, PlayerAuthorized, FantasyTeam, TeamOwned, Team, FRCEvent, TeamScore
 from sqlalchemy.sql import text
+from sqlalchemy import Integer
 import logging
 import os
 from discord.ui import Button, View
@@ -121,118 +122,101 @@ class Drafting(commands.Cog):
     return team_number in teamsEligible
   
   async def getSuggestedTeamsList(self, eventKey: str, year: int, isFiM: bool, draft_id: int, isOffseason: bool=False):
-    if (isFiM):
-      stmt = text(f"""select distinct
-                      teams.team_number,
-                      year_end_epa
-                      from
-                      teams
-                      join 
-                      teamscore
-                      on 
-                      teams.team_number=teamscore.team_key
-                      join 
-                      frcevent
-                      on
-                      teamscore.event_key=frcevent.event_key
-                      join
-                      statboticsdata
-                      on
-                      teams.team_number=statboticsdata.team_number
-                      where 
-                      teams.is_fim={isFiM}
-                      and frcevent.year={year}
-                      and statboticsdata.year={year+1}
-                      and teams.team_number not in (
-                      select team_number from draftpick
-                      where draft_id={draft_id}
-                      and not team_number = '-1' 
-                      )
-                      order by year_end_epa desc""")
-    elif (isOffseason==False):
-      stmt = f"""
-              select distinct
-              team_key,
-              year_end_epa
-              from
-              teamscore
-              join
-              statboticsdata
-              on
-              teamscore.team_key=statboticsdata.team_number
-              where 
-              event_key={eventKey}
-              and statboticsdata.year={year+1}
-              and team_key not in (
-              select team_number from draftpick
-              where draft_id={draft_id}
-              and not team_number = '-1'
-              )
-              order by year_end_epa desc
-              """
+    session = await self.bot.get_session()
+
+    # Base query for Team and StatboticsData
+    query = session.query(Team.team_number, StatboticsData.year_end_epa).distinct() \
+        .join(TeamScore, Team.team_number == TeamScore.team_key) \
+        .join(FRCEvent, TeamScore.event_key == FRCEvent.event_key) \
+        .join(StatboticsData, Team.team_number == StatboticsData.team_number) \
+        .filter(Team.team_number.notin_(
+            session.query(DraftPick.team_number).filter(
+                DraftPick.draft_id == draft_id, 
+                DraftPick.team_number != '-1'
+            )
+        ))
+
+    # Apply different filters based on conditions
+    if isFiM:
+        query = query.filter(Team.is_fim == isFiM, FRCEvent.year == year, StatboticsData.year == year - 1)
+    elif not isOffseason:
+        query = session.query(TeamScore.team_key, StatboticsData.year_end_epa).distinct() \
+            .join(StatboticsData, TeamScore.team_key == StatboticsData.team_number) \
+            .filter(
+                TeamScore.event_key == eventKey,
+                StatboticsData.year == year - 1,
+                TeamScore.team_key.notin_(
+                    session.query(DraftPick.team_number).filter(
+                        DraftPick.draft_id == draft_id,
+                        DraftPick.team_number != '-1'
+                    )
+                )
+            )
     else:
-       stmt = f"""
-              select distinct
-              team_key,
-              year_end_epa
-              from
-              teamscore
-              join
-              statboticsdata
-              on
-              teamscore.team_key=statboticsdata.team_number
-              where 
-              event_key={eventKey}
-              and statboticsdata.year={year}
-              and team_key not in (
-              select team_number from draftpick
-              where draft_id={draft_id}
-              and not team_number = '-1'
-              )
-              order by year_end_epa desc
-              """
-    result = self.bot.session.execute(stmt).all()
+        query = session.query(TeamScore.team_key, StatboticsData.year_end_epa).distinct() \
+            .join(StatboticsData, TeamScore.team_key == StatboticsData.team_number) \
+            .filter(
+                TeamScore.event_key == eventKey,
+                StatboticsData.year == year,
+                TeamScore.team_key.notin_(
+                    session.query(DraftPick.team_number).filter(
+                        DraftPick.draft_id == draft_id,
+                        DraftPick.team_number != '-1'
+                    )
+                )
+            )
+
+    # Order by year_end_epa descending
+    query = query.order_by(StatboticsData.year_end_epa.desc())
+
+    # Execute the query
+    result = query.all()
+
+    # Close the session after use
+    session.close()
+
     return result
 
   async def getAllAvailableTeamsList(self, eventKey: str, year: int, isFiM: bool, draft_id: int):
-    if (isFiM):
-      stmt = text(f"""select distinct
-                      CAST(teams.team_number AS INT)
-                      from
-                      teams
-                      join 
-                      teamscore
-                      on 
-                      teams.team_number=teamscore.team_key
-                      join 
-                      frcevent
-                      on
-                      teamscore.event_key=frcevent.event_key
-                      where 
-                      teams.is_fim={isFiM}
-                      and frcevent.year={year}
-                      and teams.team_number not in (
-                      select team_number from draftpick
-                      where draft_id={draft_id}
-                      and not team_number = '-1' 
-                      )
-                      order by CAST(teams.team_number AS INT) asc""")
+    session = await self.bot.get_session()
+
+    if isFiM:
+        # Query for FiM teams
+        query = session.query(Team.team_number, Team.team_number.cast(Integer).label('team_number_int')).distinct() \
+            .join(TeamScore, Team.team_number == TeamScore.team_key) \
+            .join(FRCEvent, TeamScore.event_key == FRCEvent.event_key) \
+            .filter(
+                Team.is_fim == isFiM,
+                FRCEvent.year == year,
+                Team.team_number.notin_(
+                    session.query(DraftPick.team_number).filter(
+                        DraftPick.draft_id == draft_id,
+                        DraftPick.team_number != '-1'
+                    )
+                )
+            )
     else:
-      stmt = f"""
-              select distinct
-              team_key
-              from
-              teamscore
-              where 
-              event_key={eventKey}
-              and team_key not in (
-              select team_number from draftpick
-              where draft_id={draft_id}
-              and not team_number = '-1'
-              )
-              order by CAST(team_key AS INT) asc
-              """
-    result = self.bot.session.execute(stmt).all()
+        # Query for non-FiM teams
+        query = session.query(TeamScore.team_key, TeamScore.team_key.cast(Integer).label('team_number_int')).distinct() \
+            .filter(
+                TeamScore.event_key == eventKey,
+                TeamScore.team_key.notin_(
+                    session.query(DraftPick.team_number).filter(
+                        DraftPick.draft_id == draft_id,
+                        DraftPick.team_number != '-1'
+                    )
+                )
+            )
+
+    # Order by team number (cast to int for sorting)
+    query = query.order_by('team_number_int')
+
+    # Execute the query and get the result
+    result = query.all()
+
+    # Close the session
+    session.close()
+
     return result
 
   async def postSuggestedTeams(self, interaction: discord.Interaction):
@@ -423,7 +407,7 @@ class Drafting(commands.Cog):
               await interaction.channel.send(embed=embed)
            embed = Embed(description="```")
         teamnumber = allavailableteams[teamcount][0]
-        embed.description+=f"{teamnumber:>7d}"
+        embed.description+=f"{teamnumber:>7s}"
         teamcount+=1
         if (teamcount%8 == 0):
            embed.description+="\n"

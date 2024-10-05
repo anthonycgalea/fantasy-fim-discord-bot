@@ -85,7 +85,7 @@ class General(commands.Cog):
     session.close()
 
   @app_commands.command(name="draftsite", description="Retrieve a link to your draft's webpage")
-  async def getLeagueWebpage(self, interaction: discord.Interaction):
+  async def getDraftWebpage(self, interaction: discord.Interaction):
     session = await self.bot.get_session()
     draft = session.query(Draft).where(Draft.discord_channel==str(interaction.channel_id))
     if (draft.count() == 0):

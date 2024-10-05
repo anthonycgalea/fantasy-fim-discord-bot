@@ -301,7 +301,7 @@ class Drafting(commands.Cog):
         if (await self.teamIsUnpicked(draft_id=draft_id, team_number=team_number)):
             if (await self.teamIsInDraft(team_number=team_number, eventKey=draft.event_key, year=league.year, isFiM=league.is_fim)):
                 await self.makeDraftPickTask(draft_id=draft_id, team_number=team_number)
-                await message.edit(content=f"Team {team_number} has been successfully selected!")
+                await message.channel.send(content=f"Team {team_number} has been successfully selected!")
             else:
                 await message.edit(content=f"Team {team_number} is not able to be drafted in this draft.")
         else:
@@ -439,9 +439,8 @@ class Drafting(commands.Cog):
 
   @app_commands.command(name="pick", description="Make a draft pick!")
   async def make_pick(self, interaction: discord.Interaction, team_number: str): 
-    await interaction.response.send_message(f"Attempting to pick team {team_number}.")
+    await interaction.response.send_message(f"Attempting to pick team {team_number}.", ephemeral=True)
     await self.makeDraftPickHandler(interaction=interaction, team_number=team_number, force=False)
-
 
   @app_commands.command(name="draftboard", description="Re-post the Draft Board")
   @commands.cooldown(rate=1, per=60)

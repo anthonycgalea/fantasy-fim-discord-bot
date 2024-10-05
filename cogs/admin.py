@@ -774,6 +774,7 @@ class Admin(commands.Cog):
       session.close()
       draftCog = drafting.Drafting(self.bot)
       await draftCog.postDraftBoard(interaction=interaction)
+      await draftCog.notifyNextPick(interaction, draft_id=draftid)
 
   @app_commands.command(name="resetdraft", description="Resets an already started draft. (ADMIN)") 
   async def resetDraft(self, interaction:discord.Interaction):

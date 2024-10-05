@@ -5,6 +5,7 @@ import logging
 import os
 from models.scores import League, FantasyTeam, WeekStatus, FantasyScores
 from models.transactions import WaiverPriority
+from models.draft import Draft
 from discord import Embed
 
 logger = logging.getLogger('discord')
@@ -81,6 +82,16 @@ class General(commands.Cog):
       await interaction.response.send_message("No league associated with this channel")
     leagueid = league.first().league_id
     await interaction.response.send_message(f"{websiteURL}/leagues/{leagueid}")
+    session.close()
+
+  @app_commands.command(name="draftsite", description="Retrieve a link to your draft's webpage")
+  async def getLeagueWebpage(self, interaction: discord.Interaction):
+    session = await self.bot.get_session()
+    draft = session.query(Draft).where(Draft.discord_channel==str(interaction.channel_id))
+    if (draft.count() == 0):
+      await interaction.response.send_message("No draft associated with this channel")
+    draftid = draft.first().league_id
+    await interaction.response.send_message(f"{websiteURL}/drafts/{draftid}")
     session.close()
 
   @app_commands.command(name="website", description="Retrieve a link to the fantasy FiM website")

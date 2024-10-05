@@ -20,6 +20,14 @@ class ManageTeam(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
     
+    def isEnglish(s):
+        try:
+            s.encode(encoding='utf-8').decode('ascii')
+        except UnicodeDecodeError:
+            return False
+        else:
+            return True
+
     async def getWaiverClaimPriority(self, fantasyId):
         session = await self.bot.get_session()
         waiverprio = session.query(WaiverClaim).filter(WaiverClaim.fantasy_team==fantasyId).order_by(WaiverClaim.priority.desc()).first()
@@ -589,8 +597,11 @@ class ManageTeam(commands.Cog):
         if teamId == None:
             await originalResponse.edit(content="You are not in this league!")
             return
-        else:
+        elif (self.isEnglish(newname)):
             await self.renameTeamTask(interaction, newname, teamId)
+        else:
+            await originalResponse.edit(content="Invalid team name.")
+            return
 
     @app_commands.command(name="adddrop", description="Add/drop a team to/from your roster!")
     async def addDrop(self, interaction:discord.Interaction, addteam: str, dropteam: str):
@@ -647,7 +658,7 @@ class ManageTeam(commands.Cog):
         else:
             await self.cancelClaimTask(interaction, teamId, priority)
 
-    @app_commands.command(name="proposetrade", description="Propose a trade to another team (tag a player on the team)")
+    @app_commands.command(name="proposetrade", description="Propose a trade to another team (use team id)")
     async def proposeTrade(self, interaction:discord.Interaction, otherfantasyid: int, offered_teams: str, requested_teams: str):
         await interaction.response.send_message("Building trade proposal...", ephemeral=True)
         originalResponse = await interaction.original_response()

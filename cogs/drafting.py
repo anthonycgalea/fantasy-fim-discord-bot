@@ -437,6 +437,32 @@ class Drafting(commands.Cog):
     await interaction.channel.send(msg)
     session.close()
 
+  async def postTeamDraftBoard(self, interaction: discord.Interaction, team_id, draft_id):
+    session = await self.bot.get_session()
+    message = await interaction.original_response()
+    fantasyTeamResult = session.query(FantasyTeam).filter(FantasyTeam.fantasy_team_id==team_id)
+    if (fantasyTeamResult.count() == 0):
+        await message.edit(content="Invalid team id")
+        return
+    fTeamFirst = fantasyTeamResult.first()
+    teamBoardEmbed = Embed(title=f"**{fTeamFirst.fantasy_team_name} Week-by-Week board**", description="```")
+    teamBoardEmbed.description += f"{'Team':^4s}{'':1s}{'Week 1':^9s}{'':1s}{'Week 2':^9s}{'':1s}{'Week 3':^9s}{'':1s}{'Week 4':^9s}{'':1s}{'Week 5':^9}\n"
+    teamsDrafted = session.query(DraftPick).filter(DraftPick.fantasy_team_id==team_id, DraftPick.team_number != "-1").order_by(DraftPick.team_number.asc())
+    for team in teamsDrafted.all():
+        teamEvents = session.query(TeamScore).filter(TeamScore.team_key==team.team_number)
+        weeks = ["---------" for k in range(5)]
+        for event in teamEvents.all():
+            frcEvent = session.query(FRCEvent).filter(FRCEvent.event_key==event.event_key).first()
+            if int(frcEvent.week) < 6:
+                if (weeks[int(frcEvent.week)-1] == "---------"):
+                    weeks[int(frcEvent.week)-1] = event.event_key
+                else:
+                    weeks[int(frcEvent.week)-1] = "2 Events"
+        teamBoardEmbed.description+=f"{team.team_number:>4s}{'':1s}{weeks[0]:^9s}{'':1s}{weeks[1]:^9s}{'':1s}{weeks[2]:^9s}{'':1s}{weeks[3]:^9s}{'':1s}{weeks[4]:^9}\n"
+    teamBoardEmbed.description += "```"
+    await message.edit(embed=teamBoardEmbed, content="")
+    session.close()
+
   @app_commands.command(name="pick", description="Make a draft pick!")
   async def make_pick(self, interaction: discord.Interaction, team_number: str): 
     await interaction.response.send_message(f"Attempting to pick team {team_number}.", ephemeral=True)
@@ -459,6 +485,20 @@ class Drafting(commands.Cog):
   async def getAllAvailable(self, interaction: discord.Interaction):
      await interaction.response.send_message("**Fetching all available teams**")
      await self.postAllAvailableTeams(interaction)
+
+  @app_commands.command(name="mydraft", description="View your draft board and when their FRC teams compete")
+  async def viewMyTeam(self, interaction: discord.Interaction):
+    await interaction.response.send_message("Collecting draft board", ephemeral=True)
+    draft: Draft = await self.getDraftFromChannel(interaction=interaction)
+    if (draft == None):
+        await message.edit(content=f"Invalid draft channel")
+    draft_id=draft.draft_id
+    teamId = await self.getFantasyTeamIdFromDraftInteraction(interaction)
+    if not teamId == None:
+        await self.postTeamDraftBoard(interaction, teamId, draft_id)
+    else:
+        message = await interaction.original_response()
+        await message.edit(content="You are not part of any team in this draft!")
 
 async def setup(bot: commands.Bot) -> None:
   cog = Drafting(bot)

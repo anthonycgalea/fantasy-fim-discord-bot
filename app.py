@@ -600,24 +600,27 @@ def get_fantasy_scores(leagueId, week):
                     weekly_score:
                       type: integer
                       description: The total score of the team for the week.
-                    qual_points:
-                      type: integer
-                      description: Qualification points scored by the team.
-                    alliance_points:
-                      type: integer
-                      description: Alliance points scored by the team.
-                    elim_points:
-                      type: integer
-                      description: Elimination points scored by the team.
-                    award_points:
-                      type: integer
-                      description: Award points scored by the team.
-                    rookie_points:
-                      type: integer
-                      description: Rookie points scored by the team.
-                    stat_correction:
-                      type: integer
-                      description: Statistical corrections applied to the team's score.
+                    breakdown:
+                      type: object
+                      properties:
+                        qual_points:
+                          type: integer
+                          description: Qualification points scored by the team.
+                        alliance_points:
+                          type: integer
+                          description: Alliance points scored by the team.
+                        elim_points:
+                          type: integer
+                          description: Elimination points scored by the team.
+                        award_points:
+                          type: integer
+                          description: Award points scored by the team.
+                        rookie_points:
+                          type: integer
+                          description: Rookie points scored by the team.
+                        stat_correction:
+                          type: integer
+                          description: Statistical corrections applied to the team's score.
       404:
         description: No fantasy teams found for the specified league and week.
       500:

@@ -20,7 +20,7 @@ class ManageTeam(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
     
-    def isEnglish(s):
+    def isEnglish(self, s):
         try:
             s.encode(encoding='utf-8').decode('ascii')
         except UnicodeDecodeError:

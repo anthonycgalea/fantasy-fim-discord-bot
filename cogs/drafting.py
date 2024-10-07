@@ -3,6 +3,7 @@ from discord import app_commands, Embed
 from discord.ext import commands
 from models.draft import Draft, DraftPick, DraftOrder, StatboticsData
 from models.scores import League, PlayerAuthorized, FantasyTeam, TeamOwned, Team, FRCEvent, TeamScore
+from models.transactions import WaiverPriority
 from sqlalchemy.sql import text
 from sqlalchemy import Integer
 import logging
@@ -417,6 +418,17 @@ class Drafting(commands.Cog):
     for team in allDraftPicks.all():
       teamOwnedToAdd = TeamOwned(team_key=team.team_number, fantasy_team_id=team.fantasy_team_id, league_id=(await self.getLeague(draft_id)).league_id, draft_id=draft_id)
       session.add(teamOwnedToAdd)
+    draftOrders = session.query(DraftOrder).filter(DraftOrder.draft_id==draft_id).order_by(DraftOrder.draft_slot.desc()).all()
+    waiverPriority = 1
+    for slot in draftOrders:
+       prioToAdd = WaiverPriority()
+       prioToAdd.priority=waiverPriority
+       prioToAdd.fantasy_team_id=slot.fantasy_team_id
+       fTeam: FantasyTeam = slot.fantasyTeam
+       league: League = fTeam.league
+       prioToAdd.league_id=league.league_id
+       session.add(prioToAdd)
+       waiverPriority+=1
     session.commit()
     session.close()
 

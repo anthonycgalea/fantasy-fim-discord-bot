@@ -43,17 +43,23 @@ class ManageTeam(commands.Cog):
         if (fantasyTeamResult.count() == 0):
             await message.edit(content="Invalid team id")
             return
-        fTeamFirst = fantasyTeamResult.first()
+        fTeamFirst: FantasyTeam = fantasyTeamResult.first()
         teamBoardEmbed = Embed(title=f"**{fTeamFirst.fantasy_team_name} Week-by-Week board**", description="```")
         teamBoardEmbed.description += f"{'Team':^4s}{'':1s}{'Week 1':^9s}{'':1s}{'Week 2':^9s}{'':1s}{'Week 3':^9s}{'':1s}{'Week 4':^9s}{'':1s}{'Week 5':^9}\n"
         teamsOwned = session.query(TeamOwned).filter(TeamOwned.fantasy_team_id==fantasyTeam).order_by(TeamOwned.team_key.asc())
         for team in teamsOwned.all():
-            teamEvents = session.query(TeamScore).filter(TeamScore.team_key==team.team_key)
-            weeks = ["---------" for k in range(5)]
+            teamEvents = (
+                session.query(TeamScore)
+                .filter(
+                    TeamScore.team_key == team.team_key,
+                    TeamScore.event.has(FRCEvent.year == fTeamFirst.league.year)
+                )
+            )
+            weeks = ["---" for k in range(5)]
             for event in teamEvents.all():
                 frcEvent = session.query(FRCEvent).filter(FRCEvent.event_key==event.event_key).first()
                 if int(frcEvent.week) < STATESWEEK:
-                    if (weeks[int(frcEvent.week)-1] == "---------"):
+                    if (weeks[int(frcEvent.week)-1] == "---"):
                         weeks[int(frcEvent.week)-1] = event.event_key
                     else:
                         weeks[int(frcEvent.week)-1] = "2 Events"

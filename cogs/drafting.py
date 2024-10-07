@@ -377,7 +377,7 @@ class Drafting(commands.Cog):
           abbrevName = fantasyteam.fantasy_team_name[:15]  # Limit team name to 15 characters
           draftBoardEmbed.description += f"{abbrevName:<15s}{'':3s}"
           for pick in draftPicks:
-              pickToAdd = "-------"
+              pickToAdd = "---"
               if pick.team_number == "-1" and ((await self.getCurrentPickNumber(draft_id=draft_id)) == pick.pick_number):
                 pickToAdd = "!PICK!"
               elif not pick.team_number == "-1":
@@ -449,12 +449,18 @@ class Drafting(commands.Cog):
     teamBoardEmbed.description += f"{'Team':^4s}{'':1s}{'Week 1':^9s}{'':1s}{'Week 2':^9s}{'':1s}{'Week 3':^9s}{'':1s}{'Week 4':^9s}{'':1s}{'Week 5':^9}\n"
     teamsDrafted = session.query(DraftPick).filter(DraftPick.fantasy_team_id==team_id, DraftPick.team_number != "-1").order_by(DraftPick.team_number.asc())
     for team in teamsDrafted.all():
-        teamEvents = session.query(TeamScore).filter(TeamScore.team_key==team.team_number)
-        weeks = ["---------" for k in range(5)]
+        teamEvents = (
+                session.query(TeamScore)
+                .filter(
+                    TeamScore.team_key == team.team_number,
+                    TeamScore.event.has(FRCEvent.year == fTeamFirst.league.year)
+                )
+            )
+        weeks = ["---" for k in range(5)]
         for event in teamEvents.all():
             frcEvent = session.query(FRCEvent).filter(FRCEvent.event_key==event.event_key).first()
             if int(frcEvent.week) < 6:
-                if (weeks[int(frcEvent.week)-1] == "---------"):
+                if (weeks[int(frcEvent.week)-1] == "---"):
                     weeks[int(frcEvent.week)-1] = event.event_key
                 else:
                     weeks[int(frcEvent.week)-1] = "2 Events"

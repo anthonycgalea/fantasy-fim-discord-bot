@@ -257,6 +257,19 @@ class Admin(commands.Cog):
       session.close()
       return
 
+  async def createOffseasonEventTask(self, interaction: discord.Interaction, eventKey, eventName, year):
+    message = await interaction.original_response()
+    with await self.bot.get_session() as session:
+      eventResult = session.query(FRCEvent).filter(FRCEvent.event_key == eventKey)
+      if eventResult.count() > 0:
+        await message.channel.send(content=f"{eventKey} already in database")
+      else:
+        newEvent = FRCEvent(event_key=eventKey, event_name=eventName, year=year, week=99, is_fim=False)
+        session.add(newEvent)
+        session.commit()
+        await message.channel.send(content=f"{eventKey} created!")
+
+
   async def importFullDistrctTask(self, district, year):
     embed = Embed(title=f"Importing {district} District", description=f"Importing event info for all {district} districts from The Blue Alliance")
     originalMessage = await self.bot.log_message(embed = embed)
@@ -966,6 +979,12 @@ class Admin(commands.Cog):
       session.commit()
       await interaction.response.send_message(f"League created successfully! <#{threadId}>")
       session.close()
+
+  @app_commands.command(name="createevent", description="Create an offseason event, only do if offseason + event isn't on TBA (ADMIN)")
+  async def createOffseasonEvent(self, interaction: discord.Interaction, eventkey: str, eventname: str, year: int):
+    if (await self.verifyAdmin(interaction)):
+      await interaction.response.send_message(f"Attempting to create event {eventkey}")
+      await self.createOffseasonEventTask(interaction, eventkey, eventname, year)
 
   @app_commands.command(name="registerteam", description="Register Fantasy Team (ADMIN)")
   async def registerTeam(self, interaction:discord.Interaction, teamname: str):

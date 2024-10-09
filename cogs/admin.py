@@ -585,7 +585,7 @@ class Admin(commands.Cog):
         else:
           # Normal ranking for non-states weeks
           for i, teamscore in enumerate(scoresToRank):
-              rank = i  # Rank starting from 1
+              rank = i + 1  # Rank starting from 1
               # Check for ties
               if i > 0 and teamscore.weekly_score == scoresToRank[i - 1].weekly_score:
                   teamscore.rank_points = scoresToRank[i - 1].rank_points  # Same rank as the previous team
@@ -650,7 +650,7 @@ class Admin(commands.Cog):
             FantasyScores.league_id == league.league_id
         ).order_by(FantasyScores.weekly_score.desc()).all()
         for i, teamscore in enumerate(scoresToRank):
-            rank = i  # Rank starting from 1
+            rank = i + 1  # Rank starting from 1
             # Check for ties
             if i > 0 and teamscore.weekly_score == scoresToRank[i - 1].weekly_score:
                 teamscore.rank_points = scoresToRank[i - 1].rank_points  # Same rank as the previous team

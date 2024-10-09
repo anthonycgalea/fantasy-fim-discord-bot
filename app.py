@@ -341,6 +341,107 @@ def get_rosters(leagueId):
     session.close()
     return jsonify(output)
 
+@app.route('/api/leagues/<int:leagueId>/rosterWeeks', methods=["GET"])
+def get_roster_weeks(leagueId):
+    """
+    Retrieve the weeks and events for teams on every fantasy team's roster in a specific league.
+    Only returns data if the league is_fim.
+    ---
+    tags:
+        - Leagues
+    parameters:
+      - name: leagueId
+        in: path
+        type: integer
+        required: true
+        description: The ID of the league for which to retrieve roster weeks and events.
+    responses:
+      200:
+        description: A list of rosters for all fantasy teams in the specified league, including the weeks and events their teams are competing in.
+        schema:
+          type: array
+          items:
+            properties:
+              fantasy_team_id:
+                type: integer
+                example: 1
+              fantasy_team_name:
+                type: string
+                example: "Team Awesome"
+              roster:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    team_key:
+                      type: string
+                      example: "frc1234"
+                    events:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          event_key:
+                            type: string
+                            example: "2023miket"
+                          event_name:
+                            type: string
+                            example: "Kettering University Event"
+                          week:
+                            type: integer
+                            example: 2
+      404:
+        description: League not found.
+      500:
+        description: Internal server error.
+    """
+    session = Session()
+    # Retrieve the league to ensure it exists
+    league = session.query(League).filter(League.league_id == leagueId).first()
+
+    if league is None:
+        abort(404, description="League not found")
+
+    if not league.is_fim:
+        session.close()
+        return jsonify([])
+    
+    teams = session.query(FantasyTeam).filter(FantasyTeam.league_id == leagueId).order_by(FantasyTeam.fantasy_team_id.asc()).all()
+    teamsOwnedInLeague = session.query(TeamOwned).filter(TeamOwned.league_id == leagueId)
+    
+    output = []
+    
+    for team in teams:
+        team_roster = teamsOwnedInLeague.filter(TeamOwned.fantasy_team_id == team.fantasy_team_id).all()
+        roster_output = []
+        
+        for frcteam in team_roster:
+            # Retrieve the events the team is competing in
+            events = session.query(FRCEvent)\
+                .join(TeamScore, TeamScore.event_key == FRCEvent.event_key)\
+                .filter(TeamScore.team_key == frcteam.team_key)\
+                .filter(FRCEvent.year == league.year)\
+                .filter(FRCEvent.week < 6)\
+                .all()
+
+            event_details = [{"event_key": event.event_key, "event_name": event.event_name, "week": event.week} for event in events]
+
+            
+            roster_output.append({
+                "team_key": frcteam.team_key,
+                "events": event_details
+            })
+        
+        output.append({
+            "fantasy_team_id": team.fantasy_team_id,
+            "fantasy_team_name": team.fantasy_team_name,
+            "roster": roster_output
+        })
+    
+    session.close()
+    return jsonify(output)
+
+
 @app.route('/api/drafts/<int:draftId>/picks', methods=["GET"])
 def get_draft_picks(draftId):
     """

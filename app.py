@@ -56,14 +56,14 @@ Session = sessionmaker(bind=engine)
 @app.route('/api/leagues', methods=['GET'])
 def get_leagues():
     """
-    Retrieve a list of active FIM leagues.
+    Retrieve a list of active leagues.
     ---
     tags:
         - Leagues
 
     responses:
       200:
-        description: A list of active FIM leagues.
+        description: A list of active leagues.
         schema:
           type: array
           items:
@@ -96,7 +96,7 @@ def get_leagues():
         description: Internal server error.
     """
     session = Session()
-    leagues = session.query(League).filter(League.active==True, League.is_fim==True).all()
+    leagues = session.query(League).filter(League.active==True).all()
     session.close()
     
     return jsonify([{
@@ -113,7 +113,7 @@ def get_leagues():
 @app.route('/api/leagues/<int:leagueId>', methods=['GET'])
 def get_league(leagueId):
     """
-    Retrieve a FIM league's data.
+    Retrieve a league's data.
     ---
     tags:
         - Leagues
@@ -125,7 +125,7 @@ def get_league(leagueId):
         description: The ID of the league for which to retrieve data from.
     responses:
       200:
-        description: An active FIM leagues.
+        description: An active league.
         schema:
           type: array
           items:
@@ -149,7 +149,7 @@ def get_league(leagueId):
         description: Internal server error.
     """
     session = Session()
-    league = session.query(League).filter(League.active==True, League.is_fim==True, League.league_id==leagueId).first()
+    league = session.query(League).filter(League.active==True, League.league_id==leagueId).first()
     session.close()
     return jsonify({"league_id": league.league_id, "league_name": league.league_name, "weekly_starts": league.team_starts, "year": league.year, "is_fim": league.is_fim} )
 
@@ -192,7 +192,8 @@ def get_fantasy_teams(leagueId):
 @app.route('/api/leagues/<int:leagueId>/teamsOnWaivers', methods=['GET'])
 def get_waiver_teams(leagueId):
     """
-    Retrieve a list of teams on waivers for a specific league, including their registered events and Statbotics data.
+    Retrieve a list of teams on waivers for a specific league, including their registered events and Statbotics data. 
+    This will only return data if league.is_fim is True.
     ---
     tags:
         - Leagues
@@ -239,6 +240,10 @@ def get_waiver_teams(leagueId):
         if league is None:
             abort(404, description="League not found")
 
+        if not league.is_fim:
+            session.close()
+            return jsonify([])
+
         year = league.year
 
         # Query to retrieve teams on waivers along with their data, ordered by team_number casted as an integer
@@ -282,7 +287,7 @@ def get_waiver_teams(leagueId):
 @app.route('/api/leagues/<int:leagueId>/rosters', methods=["GET"])
 def get_rosters(leagueId):
     """
-    Retrieve the rosters for all fantasy teams in a specific league.
+    Retrieve the rosters for all fantasy teams in a specific league. Will only return data if league is_fim.
     ---
     tags:
         - Leagues
@@ -316,6 +321,16 @@ def get_rosters(leagueId):
         description: Internal server error.
     """
     session = Session()
+    # Retrieve the league to ensure it exists
+    league = session.query(League).filter(League.league_id == leagueId).first()
+
+    if league is None:
+        abort(404, description="League not found")
+
+    if not league.is_fim:
+        session.close()
+        return jsonify([])
+    
     teams = session.query(FantasyTeam).filter(FantasyTeam.league_id==leagueId).order_by(FantasyTeam.fantasy_team_id.asc()).all()
     teamsOwnedInLeague = session.query(TeamOwned).filter(TeamOwned.league_id==leagueId)
     output = []
@@ -329,7 +344,7 @@ def get_rosters(leagueId):
 @app.route('/api/drafts/<int:draftId>/picks', methods=["GET"])
 def get_draft_picks(draftId):
     """
-    Retrieve a list of draft picks for a specific draft, including the events teams compete in with their weeks.
+    Retrieve a list of draft picks for a specific draft, including the events teams compete in with their weeks. Will not return week data if league.is_fim is false
     ---
     tags:
         - Drafts
@@ -376,6 +391,8 @@ def get_draft_picks(draftId):
     # Query for draft picks
     draft_picks = session.query(DraftPick).filter(DraftPick.draft_id == draftId).order_by(DraftPick.pick_number.asc()).all()
 
+    draft: Draft = session.query(Draft).filter(Draft.draft_id==draftId).first()
+
     if not draft_picks:
         session.close()
         return jsonify({"error": "Draft not found"}), 404
@@ -390,8 +407,14 @@ def get_draft_picks(draftId):
             .all()
         )
         
+        # Retrieve the league information
+        league = session.query(League).filter(League.league_id == draft.league_id).first()
+
+        
+        events = None
         # Format team events into the desired structure
-        events = [{"event_key": event.event_key, "week": event.week} for event in team_events]
+        if league.is_fim:
+          events = [{"event_key": event.event_key, "week": event.week} for event in team_events]
         
         picks_data.append({
             "pick_number": pick.pick_number,
@@ -683,10 +706,150 @@ def get_fantasy_scores(leagueId, week):
     session.close()
     return jsonify(output)
 
+@app.route('/api/drafts/<int:draftId>/fantasyScores', methods=['GET'])
+def get_draft_scores(draftId):
+    """
+    Retrieve the fantasy scores for all fantasy teams in a specified draft (use for single event leagues).
+
+    ---
+    tags:
+      - Drafts
+      - FantasyScores
+    parameters:
+      - name: draftId
+        in: path
+        required: true
+        description: The ID of the draft to retrieve fantasy scores for.
+        type: integer
+    responses:
+      200:
+        description: A list of fantasy teams with their weekly scores and breakdown of teams started.
+        schema:
+          type: array
+          items:
+            type: object
+            properties:
+              fantasy_team_id:
+                type: integer
+                description: The ID of the fantasy team.
+              fantasy_team_name:
+                type: string
+                description: The name of the fantasy team.
+              event_score:
+                type: integer
+                description: The total score of the fantasy team for the drafted event.
+              rank_points:
+                type: integer
+                description: Ranking points for the fantasy team.
+              week:
+                type: integer
+                description: The week number for which the scores are being retrieved.
+              teams:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    team_number:
+                      type: string
+                      description: The number of the team started.
+                    event_score:
+                      type: integer
+                      description: The total score of the team for the event drafted.
+                    breakdown:
+                      type: object
+                      properties:
+                        qual_points:
+                          type: integer
+                          description: Qualification points scored by the team.
+                        alliance_points:
+                          type: integer
+                          description: Alliance points scored by the team.
+                        elim_points:
+                          type: integer
+                          description: Elimination points scored by the team.
+                        award_points:
+                          type: integer
+                          description: Award points scored by the team.
+                        rookie_points:
+                          type: integer
+                          description: Rookie points scored by the team.
+                        stat_correction:
+                          type: integer
+                          description: Statistical corrections applied to the team's score.
+      404:
+        description: No fantasy teams found for the specified draft.
+      500:
+        description: Internal server error.
+    """
+    session = Session()
+    draft: Draft = session.query(Draft).filter(Draft.draft_id==draftId).first()
+    if not draft:
+        abort(404, "No draft found.")
+
+    league: League = draft.league
+    if league.is_fim:
+        abort(400, "Cannot make this request on a FiM league.")
+
+    # Query to get fantasy scores for the given league
+    fantasy_scores = session.query(FantasyScores).filter(
+        FantasyScores.league_id == league.league_id,
+        FantasyScores.event_key == draft.event_key
+    ).order_by(FantasyScores.fantasy_team_id.asc()).all()
+    
+    # Prepare the output
+    output = []
+    for score in fantasy_scores:
+        # Get the fantasy team details
+        fantasy_team = session.query(FantasyTeam).filter(FantasyTeam.fantasy_team_id == score.fantasy_team_id).first()
+        
+        # Get the teams draft by this fantasy team for the specified draft
+        drafted_teams = session.query(DraftPick).filter(
+            DraftPick.fantasy_team_id == score.fantasy_team_id,
+            DraftPick.draft_id == draftId
+        ).all()
+        
+        # Prepare a breakdown of scores
+        team_scores_breakdown = []
+        for drafted_team in drafted_teams:
+            # Get the team score for the started team
+            team_score = session.query(TeamScore).filter(
+                TeamScore.team_key == drafted_team.team_number,
+                TeamScore.event_key == draft.event_key
+            ).first()
+            
+            if team_score:
+                team_scores_breakdown.append({
+                    "team_number": drafted_team.team_number,
+                    "event_score": team_score.score_team(),
+                    "breakdown": {
+                    "qual_points": team_score.qual_points,
+                    "alliance_points": team_score.alliance_points,
+                    "elim_points": team_score.elim_points,
+                    "award_points": team_score.award_points,
+                    "rookie_points": team_score.rookie_points,
+                    "stat_correction": team_score.stat_correction
+                    }  # Calculate total score using the method in TeamScore
+                })
+        
+        # Append to the output if any teams were started
+        if team_scores_breakdown:
+            output.append({
+                "fantasy_team_id": fantasy_team.fantasy_team_id,
+                "fantasy_team_name": fantasy_team.fantasy_team_name,
+                "event_score": score.weekly_score,
+                "rank_points": score.rank_points,
+                "week": draft.event.week,
+                "teams": team_scores_breakdown
+            })
+    
+    session.close()
+    return jsonify(output)
+
+
 @app.route('/api/leagues/<int:leagueId>/waiverPriority', methods=['GET'])
 def get_waiver_priority(leagueId):
     """
-    Get Waiver Priority for a Specific League, including Fantasy Team names
+    Get Waiver Priority for a Specific League, including Fantasy Team names. If league isn't FiM then return an empty array.
     ---
     tags:
       - Waivers
@@ -720,6 +883,17 @@ def get_waiver_priority(leagueId):
     # Create a new session
     with Session() as session:
         # Query waiver priority along with the fantasy team name for the specified leagueId
+
+        # Retrieve the league to ensure it exists
+        league = session.query(League).filter(League.league_id == leagueId).first()
+
+        if league is None:
+            abort(404, description="League not found")
+
+        if not league.is_fim:
+            session.close()
+            return jsonify([])
+
         waiver_priority = session.query(
             WaiverPriority.fantasy_team_id,
             WaiverPriority.priority,
@@ -827,7 +1001,7 @@ def get_league_rankings(leagueId):
 
         total_ranking_points = sum(score.rank_points for score in scores)
         total_weekly_score = sum(score.weekly_score for score in scores)  # Calculate cumulative weekly score
-        
+        #TODO: incorporate scores for single-run events
         weekly_scores = [{"week": score.week,
                           "ranking_points": score.rank_points,
                           "weekly_score": score.weekly_score} for score in scores]
@@ -1029,26 +1203,48 @@ def get_available_teams(draftId):
         previous_year = year - 1  # Calculate previous year
 
         # Base query
-        base_query = session.query(
-            Team.team_number,
-            Team.name,  # Add team name to the query
-            FRCEvent.event_key,
-            FRCEvent.week,
-            StatboticsData.year_end_epa
-        ).join(TeamScore, Team.team_number == TeamScore.team_key).join(
-            FRCEvent, TeamScore.event_key == FRCEvent.event_key
-        ).outerjoin(
-            StatboticsData, (Team.team_number == StatboticsData.team_number) & (StatboticsData.year == previous_year)
-        ).filter(
-            FRCEvent.year == year,
-            Team.team_number.notin_(
-                session.query(DraftPick.team_number).filter(
-                    DraftPick.draft_id == draftId,
-                    DraftPick.team_number != '-1'
-                )
-            )
-        )
-
+        base_query = None
+        if isFiM:
+          base_query = session.query(
+              Team.team_number,
+              Team.name,  # Add team name to the query
+              FRCEvent.event_key,
+              FRCEvent.week,
+              StatboticsData.year_end_epa
+          ).join(TeamScore, Team.team_number == TeamScore.team_key).join(
+              FRCEvent, TeamScore.event_key == FRCEvent.event_key
+          ).outerjoin(
+              StatboticsData, (Team.team_number == StatboticsData.team_number) & (StatboticsData.year == previous_year)
+          ).filter(
+              FRCEvent.year == year,
+              Team.team_number.notin_(
+                  session.query(DraftPick.team_number).filter(
+                      DraftPick.draft_id == draftId,
+                      DraftPick.team_number != '-1'
+                  )
+              )
+          )
+        else:
+            base_query = session.query(
+              Team.team_number,
+              Team.name,  # Add team name to the query
+              FRCEvent.event_key,
+              FRCEvent.week,
+              StatboticsData.year_end_epa
+          ).join(TeamScore, Team.team_number == TeamScore.team_key).join(
+              FRCEvent, TeamScore.event_key == FRCEvent.event_key
+          ).outerjoin(
+              StatboticsData, (Team.team_number == StatboticsData.team_number) & (StatboticsData.year == year)
+          ).filter(
+              FRCEvent.year == year,
+              TeamScore.event_key==eventKey,
+              Team.team_number.notin_(
+                  session.query(DraftPick.team_number).filter(
+                      DraftPick.draft_id == draftId,
+                      DraftPick.team_number != '-1'
+                  )
+              )
+          )
         # Add condition for FIM
         if isFiM:
             base_query = base_query.filter(Team.is_fim == isFiM)
@@ -1187,6 +1383,9 @@ def get_available_teams_fim(leagueId):
 
         if league is None:
             abort(404, description="League not found")
+
+        if not league.is_fim:
+            return jsonify([])
 
         year = league.year
 

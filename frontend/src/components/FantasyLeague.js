@@ -5,8 +5,8 @@ import Rankings from './Rankings';
 import LeagueDrafts from './LeagueDrafts'
 import Waivers from './Waivers';
 import FreeAgentTeams from './FreeAgentTeams';
-import Rosters from './Rosters';
 import ScoresLineups from './ScoresLineups';
+import RosterWeeks from './RosterWeeks';
 
 const FantasyLeague = () => {
 
@@ -32,7 +32,7 @@ const FantasyLeague = () => {
           setActiveTab(league.is_fim ? 'rankings' : 'drafts');
       }
   }, [league]);
-  
+
     return (
       <div className="container mt-5">
   <div className="row">
@@ -122,7 +122,7 @@ const FantasyLeague = () => {
   )}
   {activeTab === 'rosters' && (
     <div className="mt-3">
-      <Rosters leagueId={leagueId}></Rosters>
+      <RosterWeeks leagueId={leagueId}></RosterWeeks>
     </div>
   )}
   {activeTab === 'availableTeams' && (

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { useParams } from 'react-router-dom';
 import api from '../api'; // Adjust the import path based on your project structure
 import './Drafts.css'; // Import the CSS file for styles
+import DraftScore from './DraftScore';
 
 const Drafts = () => {
   const { draftId } = useParams(); // Get the draftId from the URL
@@ -16,7 +17,6 @@ const Drafts = () => {
   const [activeTab, setActiveTab] = useState('draftBoard'); // State for active tab
   const [selectedWeeks, setSelectedWeeks] = useState([1, 2, 3, 4, 5]); // Initially include all weeks
 
-
   useEffect(() => {
     const fetchDraftData = async () => {
       try {
@@ -26,7 +26,8 @@ const Drafts = () => {
           api.get(`/drafts/${draftId}/picks`),
           api.get(`/drafts/${draftId}/availableTeams`),
           api.get(`/leagues/${draftResponse.data.league_id}`),
-          api.get(`/leagues/${draftResponse.data.league_id}/fantasyTeams`) // Fetch fantasy teams using league ID
+          api.get(`/leagues/${draftResponse.data.league_id}/fantasyTeams`), 
+          api.get(`/drafts/${draftId}/fantasyScores`)
         ]);
         
         setDraft(draftResponse.data);
@@ -35,7 +36,6 @@ const Drafts = () => {
         setAvailableTeams(availableTeamsResponse.data);
         setLeague(leaguesResponse.data); 
         setFantasyTeams(fantasyTeamsResponse.data);
-
       } catch (error) {
         console.error('Error fetching draft data:', error);
       }
@@ -51,9 +51,6 @@ const Drafts = () => {
         : [...prevSelectedWeeks, week] // Add if not selected
     );
   };
-
-  
-  
 
   const renderWeeksDrafted = () => {
     // Initialize a dictionary to hold the count of drafted teams per week per fantasy team
@@ -134,42 +131,55 @@ const Drafts = () => {
       };
     });
   
-    // Filter teams based on selected weeks
-    const filteredTeams = teamEventsByWeek.filter(({ events }) =>
-      selectedWeeks.some((week) => events[week - 1] !== '') // Check if any selected week has an event
-    );
-    const prevYear = league.year-1;
+    let filteredTeams;
+    if (league.is_fim) {
+      // Filter teams based on selected weeks if league.is_fim is true
+      filteredTeams = teamEventsByWeek.filter(({ events }) =>
+        selectedWeeks.some((week) => events[week - 1] !== '') // Check if any selected week has an event
+      );
+    } else {
+      // If league.is_fim is false, show all available teams without filtering
+      filteredTeams = teamEventsByWeek;
+    }
+  
+    const prevYear = league.year - 1;
     return (
       <table className="table table-bordered">
         <thead className='table-secondary'>
           <tr>
-            <th rowspan="2" class="align-middle">Team #</th>
-            <th rowspan="2" class="align-middle">Team Name</th>
-            <th colspan="5">Week</th>
-            <th rowspan="2" class="align-middle">{prevYear} EPA</th>
+            <th rowSpan="2" className="align-middle">Team #</th>
+            <th rowSpan="2" className="align-middle">Team Name</th>
+            {league.is_fim && (
+              <>
+                <th colSpan="5">Week</th>
+              </>
+            )}
+            <th rowSpan="2" className="align-middle">{league.is_fim ? prevYear : league.year} EPA</th>
           </tr>
-          <tr>
-            {weeks.map((week) => (
-              <th key={week}>
-                <div className="form-check form-switch d-flex justify-content-between align-items-center">
-                  <label className="form-check-label">{`${week}`}</label>
-                  <input
-                    type="checkbox"
-                    className="form-check-input"
-                    checked={selectedWeeks.includes(week)}
-                    onChange={() => toggleWeekSelection(week)}
-                  />
-                </div>
-              </th>
-            ))}
-          </tr>
+          {league.is_fim && (
+            <tr>
+              {weeks.map((week) => (
+                <th key={week}>
+                  <div className="form-check form-switch d-flex justify-content-between align-items-center">
+                    <label className="form-check-label">{`${week}`}</label>
+                    <input
+                      type="checkbox"
+                      className="form-check-input"
+                      checked={selectedWeeks.includes(week)}
+                      onChange={() => toggleWeekSelection(week)}
+                    />
+                  </div>
+                </th>
+              ))}
+            </tr>
+          )}
         </thead>
         <tbody>
           {filteredTeams.map(({ teamNumber, teamName, events, yearEndEpa }) => (
             <tr key={teamNumber}>
               <td>{teamNumber}</td>
               <td>{teamName}</td>
-              {events.map((event, index) => (
+              {league.is_fim && events.map((event, index) => (
                 <td key={index}>{event}</td>
               ))}
               <td>{yearEndEpa}</td> {/* Display the year_end_epa */}
@@ -179,6 +189,7 @@ const Drafts = () => {
       </table>
     );
   };
+  
   
   const renderDraftBoard = () => {
     const picksByRound = {};
@@ -254,14 +265,26 @@ const Drafts = () => {
           Available Teams
         </button>
       </li>
-      <li className="nav-item flex-fill">
+      {league?.is_fim && (
+        <li className="nav-item flex-fill">
+          <button
+            className={`nav-link ${activeTab === 'weeksDrafted' ? 'active' : ''}`}
+            onClick={() => setActiveTab('weeksDrafted')}
+          >
+            Weeks Drafted
+          </button>
+        </li>
+      )}
+      {!league?.is_fim && (
+        <li className="nav-item flex-fill">
         <button
-          className={`nav-link ${activeTab === 'weeksDrafted' ? 'active' : ''}`}
-          onClick={() => setActiveTab('weeksDrafted')}
+          className={`nav-link ${activeTab === 'scores' ? 'active' : ''}`}
+          onClick={() => setActiveTab('scores')}
         >
-          Weeks Drafted
+          Draft Score
         </button>
       </li>
+      )}
     </ul>
 
       {activeTab === 'draftBoard' && (
@@ -280,6 +303,13 @@ const Drafts = () => {
         <div className="mt-3">
           <div className="row">
             {renderWeeksDrafted()}
+          </div>
+        </div>
+      )}
+      {activeTab === 'scores' && (
+        <div className="mt-3">
+          <div className="row">
+            <DraftScore draftId={draftId} />
           </div>
         </div>
       )}

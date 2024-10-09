@@ -30,7 +30,7 @@ const Leagues = () => {
     <div className="container mt-5">
       <h1 className="mb-4 text-center">Active Leagues</h1>
       <Tabs defaultActiveKey="fim" id="leagues-tabs">
-        {fimLeagues.length > 0 && (
+        {fimLeagues?.length > 0 && (
           <Tab eventKey="fim" title="FiM Leagues">
             <Table bordered hover>
               <thead>
@@ -61,7 +61,7 @@ const Leagues = () => {
           </Tab>
         )}
         {offseasonDrafts.length > 0 && (
-          <Tab eventKey="offseason" title="Offseason Drafts">
+          <Tab eventKey="offseason" title="Offseason Leagues">
             <Table striped bordered hover>
               <thead>
                 <tr>

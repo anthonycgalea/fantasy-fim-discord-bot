@@ -845,7 +845,6 @@ def get_draft_scores(draftId):
     session.close()
     return jsonify(output)
 
-
 @app.route('/api/leagues/<int:leagueId>/waiverPriority', methods=['GET'])
 def get_waiver_priority(leagueId):
     """

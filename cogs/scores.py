@@ -1,7 +1,6 @@
-import discord, sqlalchemy
-from discord import app_commands, Embed
+import discord
+from discord import app_commands
 from discord.ext import commands
-import requests
 import logging
 import os
 from models.scores import *

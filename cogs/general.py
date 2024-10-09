@@ -3,9 +3,10 @@ from discord import app_commands
 from discord.ext import commands
 import logging
 import os
-from models.scores import League, FantasyTeam, WeekStatus, FantasyScores
+from models.scores import League, FantasyTeam, WeekStatus, FantasyScores, PlayerAuthorized
 from models.transactions import WaiverPriority
 from models.draft import Draft
+from models.users import Player
 from discord import Embed
 
 logger = logging.getLogger('discord')
@@ -95,7 +96,7 @@ class General(commands.Cog):
     session.close()
 
   @app_commands.command(name="website", description="Retrieve a link to the fantasy FiM website")
-  async def getLeagueWebpage(self, interaction: discord.Interaction):    
+  async def getWebsite(self, interaction: discord.Interaction):    
     await interaction.response.send_message(f"{websiteURL}")
 
   @app_commands.command(name="api", description="sends a link to the swagger page for the API")
@@ -169,6 +170,83 @@ class General(commands.Cog):
         await channel.send(embed=embed)
     else:
       await interaction.channel.send(content="No league associated with this channel!")
+    session.close()
+
+  @app_commands.command(name="joindraft", description="Join an offseason draft! Can specify a team name")
+  async def joinOffseasonDraft(self, interaction: discord.Interaction, teamname: str = None):
+    session = await self.bot.get_session()
+    
+    # Step 1: Find the league associated with the Discord channel
+    league = session.query(League).filter_by(discord_channel=str(interaction.channel_id)).first()
+    if not league:
+        await interaction.response.send_message("No league associated with this channel.")
+        return
+    
+    # Step 2: Check if the league is in the offseason
+    if not league.offseason:
+        await interaction.response.send_message("This league is not an offseason league.")
+        return
+    
+    # Step 3: Check if the player is already on a FantasyTeam in this league
+    player_authorization = session.query(PlayerAuthorized).join(FantasyTeam).filter(
+        PlayerAuthorized.player_id == str(interaction.user.id),
+        FantasyTeam.league_id == league.league_id
+    ).first()
+    
+    if player_authorization:
+        await interaction.response.send_message("You are already part of a fantasy team in this league.")
+        return
+
+    # Step 4: Check if the draft has already started
+    draft_started = session.query(Draft).filter_by(league_id=league.league_id, discord_channel=str(interaction.channel_id)).first()
+    if draft_started:
+        await interaction.response.send_message("The draft for this league has already started.")
+        return
+    
+    # Step 5: Check if the player has a Player object, if not, create one
+    player = session.query(Player).filter_by(user_id=str(interaction.user.id)).first()
+    if not player:
+        new_player = Player(
+            user_id=str(interaction.user.id),
+            is_admin=False  # Default setting for new players
+        )
+        session.add(new_player)
+        session.flush()
+    
+    # Step 6: Create a new FantasyTeam for the user
+    max_team_id = session.query(FantasyTeam.fantasy_team_id).order_by(FantasyTeam.fantasy_team_id.desc()).first()
+    new_team_id = max_team_id[0] + 1 if max_team_id else 1
+    
+    # Step 7: Check if the team name is unique in the league
+    if teamname:
+        existing_team = session.query(FantasyTeam).filter_by(league_id=league.league_id, fantasy_team_name=teamname).first()
+        if existing_team:
+            teamname = None  # Reset team name to None if it's already taken
+
+    # Use the provided team name or the player's Discord nickname if no valid team name is provided
+    new_team_name = teamname if teamname else interaction.user.display_name
+    
+    new_fantasy_team = FantasyTeam(
+        fantasy_team_id=new_team_id,
+        league_id=league.league_id,
+        fantasy_team_name=new_team_name
+    )
+    
+    session.add(new_fantasy_team)
+    session.flush()
+    # Step 8: Link the player to the new FantasyTeam
+    player_authorized = PlayerAuthorized(
+        player_id=str(interaction.user.id),
+        fantasy_team_id=new_team_id
+    )
+    
+    session.add(player_authorized)
+    
+    # Step 8: Commit changes and send a success message
+    session.commit()
+    await interaction.response.send_message(f"Successfully joined the offseason draft with team '{new_team_name}' and team ID {new_fantasy_team.fantasy_team_id}!")
+
+    
     session.close()
 
 async def setup(bot: commands.Bot) -> None:

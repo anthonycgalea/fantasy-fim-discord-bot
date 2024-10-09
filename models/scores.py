@@ -22,7 +22,7 @@ class FRCEvent(Base):
 
   event_key: Mapped[str] = mapped_column(primary_key=True)
   event_name: Mapped[str] = mapped_column(String(255), nullable=False)
-  year: Mapped[int] = mapped_column(Integer(), nullable=False)
+  year: Mapped[int] = mapped_column(Integer(), nullable=False, primary_key=True)
   week: Mapped[int] = mapped_column(Integer(), nullable=False)
   is_fim: Mapped[bool] = mapped_column(Boolean(), nullable=False)
 
@@ -71,9 +71,9 @@ class TeamScore(Base):
     term2 = 10 / erfinv(1 / alpha)
     
     # Combine the terms and calculate the result
-    result = erfinv(term1) * (term2 + 12)
+    result = (erfinv(term1) * (term2)) + 12
     
-    self.qual_points=result
+    self.qual_points=round(result)
   
   def update_alliance_points(self, pick: int=17): #17 if unpicked
     self.alliance_points=17-pick
@@ -169,6 +169,7 @@ class FantasyScores(Base):
   league_id: Mapped[int] = mapped_column(ForeignKey("league.league_id"), primary_key=True)
   fantasy_team_id: Mapped[int] = mapped_column(ForeignKey("fantasyteam.fantasy_team_id"), primary_key=True)
   week: Mapped[int] = mapped_column(Integer(), primary_key=True)
+  event_key: Mapped[int] = mapped_column(String(25), primary_key=True)
   rank_points: Mapped[int] = mapped_column(Double())
   weekly_score: Mapped[int] = mapped_column(Integer())
   

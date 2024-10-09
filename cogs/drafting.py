@@ -1,10 +1,9 @@
-import discord, sqlalchemy
+import discord
 from discord import app_commands, Embed
 from discord.ext import commands
 from models.draft import Draft, DraftPick, DraftOrder, StatboticsData
 from models.scores import League, PlayerAuthorized, FantasyTeam, TeamOwned, Team, FRCEvent, TeamScore
 from models.transactions import WaiverPriority
-from sqlalchemy.sql import text
 from sqlalchemy import Integer
 import logging
 import os
@@ -222,8 +221,9 @@ class Drafting(commands.Cog):
         await message.edit(content="No draft associated with this channel.")
         return
     league: League = await self.getLeague(draft_id=draft.draft_id)
-    suggestedTeams = await self.getSuggestedTeamsList(eventKey=draft.event_key, year=league.year, isFiM=league.is_fim, draft_id=draft.draft_id)
-    embed = Embed(title="**Suggested teams (autodraft)**", description=f"```{'Team':>10s}{f'{league.year-1} EPA':>12s}\n")
+    suggestedTeams = await self.getSuggestedTeamsList(eventKey=draft.event_key, year=league.year, isFiM=league.is_fim, draft_id=draft.draft_id, isOffseason=league.offseason)
+    yearToSuggest = league.year if league.offseason else league.year - 1
+    embed = Embed(title="**Suggested teams (autodraft)**", description=f"```{'Team':>10s}{f'{yearToSuggest} EPA':>12s}\n")
     teamsRemaining = len(suggestedTeams)
     teamsToReport = 10
     if (teamsRemaining < 10):

@@ -344,6 +344,102 @@ class Admin(commands.Cog):
       session.close()
       return
 
+  async def scoreSingularEventTask(self, interaction: discord.Interaction, eventKey: str):
+    session = await self.bot.get_session()
+    message = await interaction.original_response()
+    eventToScore: FRCEvent = session.query(FRCEvent).filter(FRCEvent.event_key==eventKey).first()
+    embed = Embed(title=f"Scoring {eventKey}", description=f"Importing event info for {eventKey} from The Blue Alliance")
+    await message.edit(content="", embed = embed)
+    embed.description = ""
+    if eventToScore and eventToScore.is_fim:
+      logger.info(f"Event to score: {eventToScore.event_name}")
+      requestURL = TBA_API_ENDPOINT + "event/" + eventToScore.event_key + "/district_points"
+      reqheaders = {"X-TBA-Auth-Key": TBA_AUTH_KEY}
+      eventresponse = requests.get(requestURL, headers=reqheaders).json()
+      currentScores = session.query(TeamScore).filter(TeamScore.event_key==eventToScore.event_key)
+      for team in eventresponse["points"]:
+        teamscore = None
+        if currentScores.filter(TeamScore.team_key==team[3:]).count() == 0:
+          teamscore = TeamScore(team_key=team[3:], event_key=eventToScore.event_key)
+          session.add(teamscore)
+        else:
+          teamscore = currentScores.filter(TeamScore.team_key==team[3:]).first()
+        teamscore.qual_points=eventresponse["points"]["frc"+teamscore.team_key]["qual_points"]
+        teamscore.alliance_points=eventresponse["points"]["frc"+teamscore.team_key]["alliance_points"]
+        teamscore.elim_points=eventresponse["points"]["frc"+teamscore.team_key]["elim_points"]
+        teamscore.award_points=eventresponse["points"]["frc"+teamscore.team_key]["award_points"]
+        team = session.query(Team).filter(Team.team_number==teamscore.team_key).first()
+        if (not eventToScore.week == 6):
+          if (int(team.rookie_year) == int(eventToScore.year)):
+            teamscore.rookie_points = 5
+          elif (int(team.rookie_year) == int(eventToScore.year)-1):
+            teamscore.rookie_points = 2
+      embed.description += f"Successfully scored **{eventToScore.event_name}**\n"
+      await message.edit(embed=embed)
+      session.commit() 
+    elif eventToScore:
+      await self.scoreOffseasonEventTask(interaction, eventKey)
+    else:
+      await message.edit(content=f"Could not find event {eventKey}")
+
+  async def scoreOffseasonEventTask(self, interaction: discord.Interaction, eventKey: str):
+    session = await self.bot.get_session()
+    message = await interaction.original_response()
+    eventToScore: FRCEvent = session.query(FRCEvent).filter(FRCEvent.event_key==eventKey).first()
+    embed = Embed(title=f"Scoring {eventKey}", description=f"Importing event info for {eventKey} from The Blue Alliance")
+    await message.edit(content="", embed = embed)
+    embed.description = ""
+    if eventToScore:
+      logger.info(f"Event to score: {eventToScore.event_name}")
+      requestURL = TBA_API_ENDPOINT + "event/" + eventToScore.event_key + "/teams/statuses"
+      reqheaders = {"X-TBA-Auth-Key": TBA_AUTH_KEY}
+      statusesResponse = requests.get(requestURL, headers=reqheaders).json()
+      for teamKey in statusesResponse.keys():
+        teamJson = statusesResponse[teamKey]
+        teamNum = teamKey[3:]
+        teamScoreToMod: TeamScore = session.query(TeamScore).filter(TeamScore.event_key==eventKey, TeamScore.team_key==teamNum).first()
+        if not teamScoreToMod:
+          teamScoreToMod = TeamScore(team_key=teamNum, event_key=eventKey)
+          session.add(teamScoreToMod)
+          session.flush()
+        notCompeted = teamJson["qual"] == None
+        if notCompeted:
+          continue
+        #TODO: fix ranking data
+        rankData = teamJson["qual"]["ranking"]
+        numTeams = teamJson["qual"]["num_teams"]
+        teamScoreToMod.update_qualification_points(int(rankData["rank"]), int(numTeams)) #qual points
+        allianceData = teamJson["alliance"]
+        if not allianceData:
+          teamScoreToMod.update_alliance_points()
+        else:
+          pick = None
+          if allianceData["pick"] in [0, 1]:
+            pick = int(allianceData["number"])
+          elif allianceData["pick"] == 2:
+            pick = 17-int(allianceData["number"])
+          teamScoreToMod.update_alliance_points(pick)
+        elimsData = teamJson["playoff"]
+        if not elimsData:
+          teamScoreToMod.update_elim_points()
+        else:
+          if elimsData["level"] == "f" and elimsData["status"] == "won":
+            teamScoreToMod.update_elim_points(won_finals=True)
+          elif elimsData["level"] == "f":
+            teamScoreToMod.update_elim_points(lost_finals=True)
+          elif elimsData["double_elim_round"] == "Round 5":
+            teamScoreToMod.update_elim_points(lost_match_13=True)
+          elif elimsData["double_elim_round"] == "Round 4":
+            teamScoreToMod.update_elim_points(lost_match_12=True)
+          else:
+            teamScoreToMod.update_elim_points()
+        session.flush()
+      embed.description += f"Successfully scored **{eventToScore.event_name}**\n"
+      await message.edit(embed=embed)
+      session.commit() 
+    else:
+      await message.edit(content=f"Could not find event {eventKey}")
+
   async def scoreWeekTask(self, interaction: discord.Interaction, year, week):
     session = await self.bot.get_session()
     message = await interaction.original_response()
@@ -410,6 +506,7 @@ class Admin(commands.Cog):
                 teamscore = FantasyScores(
                     league_id=league.league_id,
                     fantasy_team_id=fantasyTeam.fantasy_team_id,
+                    event_key=f"fim{league.year}",
                     week=week,
                     rank_points=0,
                     weekly_score=0
@@ -485,11 +582,85 @@ class Admin(commands.Cog):
                     teamscore.rank_points = scoresToRank[i - 1].rank_points  # Same rank as the previous team
                 else:
                     teamscore.rank_points = len(fantasyTeams) - rank
+        else:
+          # Normal ranking for non-states weeks
+          for i, teamscore in enumerate(scoresToRank):
+              rank = i + 1  # Rank starting from 1
+              # Check for ties
+              if i > 0 and teamscore.weekly_score == scoresToRank[i - 1].weekly_score:
+                  teamscore.rank_points = scoresToRank[i - 1].rank_points  # Same rank as the previous team
+              else:
+                  teamscore.rank_points = len(fantasyTeams) - rank
+
+          session.flush()
 
         session.commit()
 
     session.close()
     await message.edit(content=f"Updated all scores for {year} week {week}, {'with states rules applied' if states else ''}")
+
+  async def scoreSingleDraft(self, interaction: discord.Interaction, draft_id: int):
+    session = await self.bot.get_session()
+    message = await interaction.original_response()
+    draft: Draft = session.query(Draft).filter(Draft.draft_id==draft_id).first()
+    league: League = session.query(League).filter(League.league_id==draft.league_id).first()
+    frcEvent: FRCEvent = session.query(FRCEvent).filter(FRCEvent.event_key==draft.event_key).first()
+    if league:
+        fantasyTeams = session.query(FantasyTeam).filter(FantasyTeam.league_id==league.league_id).all()
+        # Calculate scores for each fantasy team
+        for fantasyTeam in fantasyTeams:
+            teamscore = session.query(FantasyScores).filter(
+                FantasyScores.fantasy_team_id == fantasyTeam.fantasy_team_id
+            ).filter(FantasyScores.week == frcEvent.week).first()
+            if not teamscore:
+                teamscore = FantasyScores(
+                    league_id=league.league_id,
+                    fantasy_team_id=fantasyTeam.fantasy_team_id,
+                    event_key=frcEvent.event_key,
+                    week=frcEvent.week,
+                    rank_points=0,
+                    weekly_score=0
+                )
+                session.add(teamscore)
+                session.flush()
+            draftPicks = session.query(DraftPick).filter(
+                DraftPick.fantasy_team_id == fantasyTeam.fantasy_team_id,
+                DraftPick.draft_id == draft.draft_id
+            ).all()
+            # Calculate weekly score based on team starts
+            weekly_score = 0
+            for pick in draftPicks:
+                if frcEvent.week in [6, 7, 8, 9]: #future proofing for future champs week shifting
+                    # States+Champs Weeks: Count all points across all events the team competes in
+                    team_scores = session.query(TeamScore).join(League).filter(
+                        TeamScore.team_key == pick.team_number
+                    ).filter(League.year == league.year).all()
+                else:
+                    # Non-States: Only include points for the specific event
+                    team_scores = session.query(TeamScore).filter(
+                        TeamScore.team_key == pick.team_number
+                    ).filter(TeamScore.event_key == draft.event_key).all()
+                # Sum up the scores for this team
+                for score in team_scores:
+                    weekly_score += score.score_team()
+            teamscore.weekly_score = weekly_score
+            session.flush()
+        # Retrieve all scores for the league in the current week
+        scoresToRank = session.query(FantasyScores).filter(
+            FantasyScores.league_id == league.league_id
+        ).order_by(FantasyScores.weekly_score.desc()).all()
+        for i, teamscore in enumerate(scoresToRank):
+            rank = i + 1  # Rank starting from 1
+            # Check for ties
+            if i > 0 and teamscore.weekly_score == scoresToRank[i - 1].weekly_score:
+                teamscore.rank_points = scoresToRank[i - 1].rank_points  # Same rank as the previous team
+            else:
+                teamscore.rank_points = len(fantasyTeams) - rank
+        session.flush()
+
+    session.commit()
+    await message.edit(content=f"Updated all scores for {frcEvent.event_key}")
+    session.close()
 
   async def notifyWeeklyScoresTask(self, interaction: discord.Interaction, year, week):
     session = await self.bot.get_session()
@@ -528,6 +699,32 @@ class Admin(commands.Cog):
         await channel.send(content=congrats_message, embed=embed)
     session.close()
     await interaction.followup.send(f"Weekly scores for Week {week} have been sent to all active leagues.")
+
+  async def notifySingleDraftTask(self, interaction: discord.Interaction, draft_id):
+    session = await self.bot.get_session()
+    message = await interaction.original_response()
+    draft: Draft = session.query(Draft).filter(Draft.draft_id==draft_id).first()
+    league: League = session.query(League).filter(League.league_id==draft.league_id).first()
+    frcEvent: FRCEvent = session.query(FRCEvent).filter(FRCEvent.event_key==draft.event_key).first()
+    if league:
+        teams = session.query(FantasyScores).filter(FantasyScores.league_id == league.league_id)\
+                    .filter(FantasyScores.event_key == frcEvent.event_key)\
+                    .order_by(FantasyScores.weekly_score.desc()).all()
+        title = f"Final Scores for {frcEvent.event_name}"
+        embed = Embed(title=title, description=f"Here are the official scores for {frcEvent.event_name}")
+        for idx, team_score in enumerate(teams):
+            fantasy_team = team_score.fantasyTeam
+            embed.add_field(name=f"{idx + 1}. {fantasy_team.fantasy_team_name}", 
+                            value=f"Score: {team_score.weekly_score} points", inline=False)
+        winning_team = teams[0].fantasyTeam
+        winning_score = teams[0].weekly_score
+        playersToNotify = session.query(PlayerAuthorized).filter(PlayerAuthorized.fantasy_team_id==winning_team.fantasy_team_id).all()
+        congrats_message = f"**Congratulations to {winning_team.fantasy_team_name} for winning this draft with {winning_score} points!**\n"
+        for player in playersToNotify:
+          congrats_message += f"<@{player.player_id}> "
+        channel = self.bot.get_channel(int(league.discord_channel))
+        await channel.send(content=congrats_message, embed=embed)
+    session.close()
 
   async def getLeagueStandingsTask(self, interaction: discord.Interaction, year, week):
     session = await self.bot.get_session()
@@ -589,6 +786,100 @@ class Admin(commands.Cog):
     # Notify the user who triggered the command that the task is complete
     await interaction.followup.send(f"League standings for {year} up to week {week} have been sent to all active leagues.")
 
+  async def addTeamsToEventTask(self, interaction: discord.Interaction, teams: str, draft: Draft): 
+    session = await self.bot.get_session()
+    # Step 1: Retrieve the associated FRCEvent from the draft object
+    event = session.query(FRCEvent).filter_by(event_key=draft.event_key).first()
+    if not event:
+        await interaction.followup.send(f"Event with key {draft.event_key} not found.")
+        return
+    # Step 2: Split the comma-separated team list
+    team_numbers = [team.strip() for team in teams.split(",")]
+    # Step 3: Iterate through each team and create Team objects if they don't exist
+    for team_number in team_numbers:
+        team = session.query(Team).filter_by(team_number=team_number).first()
+        if not team:
+            # Create a new Team object
+            team = Team(
+                team_number=team_number,
+                name="Offseason Team",
+                rookie_year=1992
+            )
+            session.add(team)
+    # Step 4: Flush the session to insert Team objects and generate primary keys
+    session.flush()
+    # Step 5: Create TeamScore objects for the event
+    for team_number in team_numbers:
+        team_score = TeamScore(
+            team_key=team_number,
+            event_key=event.event_key
+        )
+        session.add(team_score)
+    # Step 6: Commit the changes
+    session.commit()
+    await interaction.followup.send(f"Teams added to event {event.event_name} successfully.")
+
+  async def reassignBTeamTask(self, interaction: discord.Interaction, originalBTeam: str, newBTeamNumber: str, draft: Draft):
+    session = await self.bot.get_session()
+
+    try:
+        # Step 1: Check if the draft and the originalBTeam exist in the current draft
+        team_score = session.query(TeamScore).filter_by(
+            team_key=originalBTeam,
+            event_key=draft.event_key
+        ).first()
+
+        draft_pick = session.query(DraftPick).filter_by(
+            team_number=originalBTeam,
+            draft_id=draft.draft_id
+        ).first()
+
+        # If neither TeamScore nor DraftPick exist, notify the user
+        if not team_score or not draft_pick:
+            await interaction.followup.send(f"Could not find team '{originalBTeam}' in this draft.")
+            return
+
+        # Step 2: Check if the newBTeam exists
+        new_team = session.query(Team).filter_by(team_number=newBTeamNumber).first()
+
+        if not new_team:
+            # Create the new Team object
+            new_team = Team(
+                team_number=newBTeamNumber,
+                name="Offseason Team",
+                rookie_year=1992
+            )
+            session.add(new_team)
+
+            # Flush to ensure the new team is added to the session and available for foreign key references
+            session.flush()
+
+        # Check if a TeamScore already exists for the new team
+        existing_team_score = session.query(TeamScore).filter_by(
+            team_key=newBTeamNumber,
+            event_key=draft.event_key
+        ).first()
+
+        if existing_team_score:
+            await interaction.followup.send(f"A TeamScore already exists for team '{newBTeamNumber}'.")
+            return
+
+        # Step 3: Update the TeamScore and DraftPick to reflect the new team
+        team_score.team_key = newBTeamNumber
+        draft_pick.team_number = newBTeamNumber
+
+        # Step 4: Commit changes
+        session.commit()
+        
+        # Step 5: Send success message
+        await interaction.followup.send(f"Successfully reassigned team '{originalBTeam}' to '{newBTeamNumber}'.")
+
+    except Exception as e:
+        await interaction.followup.send("An error occurred while reassigning the team. Please check the logs for more details.")
+        print(e)  # Print the stack trace or log it appropriately
+    finally:
+        session.close()
+
   async def verifyAdmin(self, interaction: discord.Interaction):
     session = await self.bot.get_session()
     isAdmin = session.query(Player).filter(Player.user_id==str(interaction.user.id), Player.is_admin==True).first()
@@ -645,15 +936,31 @@ class Admin(commands.Cog):
       asyncio.create_task(self.updateTeamsTask(interaction, startpage))
       
   @app_commands.command(name="addleague", description="Create a new league (ADMIN)")
-  async def createLeague(self, interaction: discord.Interaction, league_name: str, team_limit: int, year: int, is_fim: bool = False, team_starts: int = 3, offseason: bool = False, team_size_limit: int = 3):
+  async def createLeague(self, interaction: discord.Interaction, league_name: str, team_limit: int, year: int, is_fim: bool = False, team_starts: int = 3, team_size_limit: int = 3):
     if (await self.verifyAdmin(interaction)):
       forum = await self.getForum()
-      nameOfDraft = f"{league_name} League Thread"
-      thread = (await forum.create_thread(content="test",name=nameOfDraft))[0]
+      threadName = f"{league_name} Thread"
+      thread = (await forum.create_thread(content=f"This is your league thread for {league_name}",name=threadName))[0]
       threadId = thread.id   
       newLeagueId = await self.getLeagueId()
       leagueToAdd = League(league_id=newLeagueId, league_name=league_name, team_limit=team_limit,\
-                           team_starts=team_starts, offseason=offseason, is_fim=is_fim, year=year, discord_channel=threadId, team_size_limit=team_size_limit)
+                           team_starts=team_starts, offseason=False, is_fim=is_fim, year=year, discord_channel=threadId, team_size_limit=team_size_limit)
+      session = await self.bot.get_session()
+      session.add(leagueToAdd)
+      session.commit()
+      await interaction.response.send_message(f"League created successfully! <#{threadId}>")
+      session.close()
+
+  @app_commands.command(name="createoffseason", description="Create a new offseason 'league' (ADMIN)")
+  async def createOffseasonLeague(self, interaction: discord.Interaction, league_name: str, year: int, teams_to_draft: int = 3):
+    if (await self.verifyAdmin(interaction)):
+      forum = await self.getForum()
+      threadName = f"{league_name} Thread"
+      thread = (await forum.create_thread(content=f"This is your league thread for {league_name}",name=threadName))[0]
+      threadId = thread.id   
+      newLeagueId = await self.getLeagueId()
+      leagueToAdd = League(league_id=newLeagueId, league_name=league_name, team_limit=100,\
+                           team_starts=teams_to_draft, offseason=True, is_fim=False, year=year, discord_channel=threadId, team_size_limit=teams_to_draft)
       session = await self.bot.get_session()
       session.add(leagueToAdd)
       session.commit()
@@ -675,11 +982,11 @@ class Admin(commands.Cog):
         return
       newTeamId = await self.getFantasyTeamId()
       fantasyTeamToAdd = FantasyTeam(fantasy_team_id=newTeamId, fantasy_team_name=teamname, league_id=leagueid)
-      session = await self.bot.get_session()
+      #session = await self.bot.get_session()
       session.add(fantasyTeamToAdd)
       session.commit()
-      session.close()
       await interaction.response.send_message(f"Team {teamname} created successfully in league with id {leagueid}. Team id is {fantasyTeamToAdd.fantasy_team_id}")
+      session.close()
 
   @app_commands.command(name="fillleague", description="Populates a League to the max amount of teams with generic teams (ADMIN)")
   async def populateLeague(self, interaction:discord.Interaction):
@@ -856,7 +1163,7 @@ class Admin(commands.Cog):
           await interaction.channel.send(content="No draft associated with this channel.")
           return
       league: League = await draftCog.getLeague(draft_id=draft.draft_id)
-      suggestedTeams = await draftCog.getSuggestedTeamsList(eventKey=draft.event_key, year=league.year, isFiM=league.is_fim, draft_id=draft.draft_id)
+      suggestedTeams = await draftCog.getSuggestedTeamsList(eventKey=draft.event_key, year=league.year, isFiM=league.is_fim, draft_id=draft.draft_id, isOffseason=league.offseason)
       teamToPick = suggestedTeams[0][0]
       await draftCog.makeDraftPickHandler(interaction=interaction, team_number=teamToPick, force=True)
 
@@ -1096,6 +1403,52 @@ class Admin(commands.Cog):
       session.commit()
       await msg.edit(content="Success!")
       session.close()
+
+  @app_commands.command(name="scoredraft", description="Score an individual draft")
+  async def score_draft(self, interaction: discord.Interaction):
+    if (await self.verifyAdmin(interaction)):
+      await interaction.response.send_message(f"Attempting to score draft.")
+      response = await interaction.original_response()
+      draftCog = drafting.Drafting(self.bot)
+      draft: Draft = await draftCog.getDraftFromChannel(interaction)
+      if not draft:
+        await response.edit(content="No draft associated with this channel")
+        return
+      league: League = await draftCog.getLeague(draft.draft_id)
+      if league.is_fim:
+        await response.edit(content="Not a valid league to run scoredraft in")
+        return
+      else:
+        if league.offseason:
+          await self.scoreOffseasonEventTask(interaction, draft.event_key)
+        else:
+          await self.scoreSingularEventTask(interaction, draft.event_key)
+        await self.scoreSingleDraft(interaction, draft.draft_id)
+        await self.notifySingleDraftTask(interaction, draft.draft_id)
+
+  @app_commands.command(name="addeventteams", description="Add teams to an event (use for offseasons with released team list) (ADMIN)")
+  async def addEventTeams(self, interaction: discord.Interaction, teams: str):
+    if (await self.verifyAdmin(interaction)):
+      await interaction.response.send_message(f"Attempting to admin add teams {teams} to event")
+      response = await interaction.original_response()
+      draftCog = drafting.Drafting(self.bot)
+      draft: Draft = await draftCog.getDraftFromChannel(interaction)
+      if not draft:
+        await response.edit(content="No draft associated with this channel")
+        return
+      await self.addTeamsToEventTask(interaction, teams, draft)
+      
+  @app_commands.command(name="reassignbteam", description="Reassign B teams to different numbers (for use with offseasons) (ADMIN)")
+  async def reassignBTeam(self, interaction: discord.Interaction, oldteamnumber: str, newteamnumber: str):
+    if (await self.verifyAdmin(interaction)):
+      await interaction.response.send_message(f"Attempting to admin reassign {oldteamnumber} to {newteamnumber} for this event")
+      response = await interaction.original_response()
+      draftCog = drafting.Drafting(self.bot)
+      draft: Draft = await draftCog.getDraftFromChannel(interaction)
+      if not draft:
+        await response.edit(content="No draft associated with this channel")
+        return
+      await self.reassignBTeamTask(interaction, oldteamnumber, newteamnumber, draft)
 
 async def setup(bot: commands.Bot) -> None:
   cog = Admin(bot)

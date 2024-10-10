@@ -269,8 +269,7 @@ class Admin(commands.Cog):
         session.commit()
         await message.channel.send(content=f"{eventKey} created!")
 
-
-  async def importFullDistrctTask(self, district, year):
+  async def importFullDistrctTask(self, year, district: str = "fim"):
     embed = Embed(title=f"Importing {district} District", description=f"Importing event info for all {district} districts from The Blue Alliance")
     originalMessage = await self.bot.log_message(embed = embed)
     newEventsEmbed = Embed(title="New Events", description="No new events")
@@ -1129,7 +1128,7 @@ class Admin(commands.Cog):
   async def importDistrict(self, interaction: discord.Interaction, year: str, district: str = "fim"):
     if (await self.verifyAdmin(interaction)):
       await interaction.response.send_message(f"Force updating district {district}")
-      asyncio.create_task(self.importFullDistrctTask(district, year))
+      asyncio.create_task(self.importFullDistrctTask(year, district))
   
   @app_commands.command(name="scoreupdate", description="Generate a score update for the given week (ADMIN)")
   async def updateScores(self, interaction: discord.Interaction, year: int, week: int, final: bool=False, states: bool=False):

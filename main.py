@@ -44,13 +44,13 @@ class FantasyFiMBot(commands.Bot):
     def run_scheduled_district_update(self):
         while True:
             now = time.localtime()
-            if now.tm_hour == 3 and now.tm_min == 0:
+            if now.tm_hour == 7 and now.tm_min == 0:
                 self.loop.create_task(self.district_update_job())
             time.sleep(60)
 
     async def district_update_job(self):
         adminCog = admin.Admin(self)
-        await adminCog.importFullDistrctTask("fim", 2025)
+        await adminCog.importFullDistrctTask(2025)
 
     async def get_session(self):
         Session = sessionmaker(bind=self.engine)

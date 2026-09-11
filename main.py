@@ -73,7 +73,7 @@ class FantasyFiMBot(commands.Bot):
 
     async def district_update_job(self):
         adminCog = admin.Admin(self)
-        await adminCog.importFullDistrctTask(2026)
+        await adminCog.importFullDistrctTask(2027)
 
     async def verifyTeamMember(
         self, interaction: discord.Interaction, user: discord.User
@@ -166,7 +166,7 @@ class FantasyFiMBot(commands.Bot):
             )
         )
 
-        #threading.Thread(target=self.run_scheduled_district_update, daemon=True).start()
+        threading.Thread(target=self.run_scheduled_district_update, daemon=True).start()
 
         logger.info("Bot startup complete!")
 
